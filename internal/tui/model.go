@@ -70,7 +70,7 @@ func New(handler Handler, options ...any) Model {
 		}
 	}
 	model.resize()
-	model.viewport.SetContent(strings.Join(model.transcript, "\n\n"))
+	model.refreshTranscript()
 	return model
 }
 
@@ -231,6 +231,7 @@ func (m Model) View() tea.View {
 	if m.busy {
 		status = m.spinner.View() + " " + status
 	}
+	status = wrapText(status, m.width)
 	header := lipgloss.NewStyle().Bold(true).Render("OpenHome")
 	verbose := "off"
 	if m.verbose {
@@ -240,7 +241,7 @@ func (m Model) View() tea.View {
 	if m.permissions != nil {
 		mode = m.permissions.Mode()
 	}
-	footer := lipgloss.NewStyle().Faint(true).Render("/new  /verbose details:" + verbose + "  /permissions:" + string(mode) + "  /exit  Ctrl+C")
+	footer := lipgloss.NewStyle().Faint(true).Render(wrapText("/new  /verbose details:"+verbose+"  /permissions:"+string(mode)+"  /exit  Ctrl+C", m.width))
 	extra := ""
 	if m.approval != nil {
 		extra = fmt.Sprintf("Permission required: %s\nReason: %s\nTarget: %s\n%s\n%s",
@@ -251,7 +252,18 @@ func (m Model) View() tea.View {
 	} else if m.choosingPermissions {
 		extra = "Permission mode: " + choiceLine(m.permissionChoice, "Always ask", "Default", "Always allow")
 	}
-	return tea.NewView(strings.Join([]string{header, m.viewport.View(), status, extra, m.input.View(), footer}, "\n"))
+	extra = wrapText(extra, m.width)
+	viewport := m.viewport
+	sections := []string{header, "", status, extra, m.input.View(), footer}
+	chromeHeight := len(sections) - 1
+	for _, section := range sections {
+		if section != "" {
+			chromeHeight += lipgloss.Height(section)
+		}
+	}
+	viewport.SetHeight(max(1, m.height-chromeHeight))
+	sections[1] = viewport.View()
+	return tea.NewView(strings.Join(sections, "\n"))
 }
 
 func (m Model) resolveApproval(decision permissions.Decision) (tea.Model, tea.Cmd) {
@@ -324,7 +336,7 @@ func waitForApproval(prompter *permissions.ChannelPrompter) tea.Cmd {
 
 func (m *Model) appendTranscript(label, text string) {
 	m.transcript = append(m.transcript, fmt.Sprintf("[%s] %s", label, text))
-	m.viewport.SetContent(strings.Join(m.transcript, "\n\n"))
+	m.refreshTranscript()
 	m.viewport.GotoBottom()
 }
 
@@ -335,6 +347,22 @@ func (m *Model) resize() {
 	m.viewport.SetWidth(m.width)
 	m.viewport.SetHeight(max(1, m.height-8))
 	m.input.SetWidth(m.width)
+	m.refreshTranscript()
+}
+
+func (m *Model) refreshTranscript() {
+	entries := make([]string, len(m.transcript))
+	for index, entry := range m.transcript {
+		entries[index] = wrapText(entry, m.width)
+	}
+	m.viewport.SetContent(strings.Join(entries, "\n\n"))
+}
+
+func wrapText(text string, width int) string {
+	if width <= 0 || text == "" {
+		return text
+	}
+	return lipgloss.Wrap(text, width, "")
 }
 
 func runTask(handler Handler, ctx context.Context, input string) tea.Cmd {

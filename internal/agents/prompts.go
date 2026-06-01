@@ -19,8 +19,11 @@ A skill is an instruction playbook, not an executable tool.
 Always return a non-empty skillName. Use either one exact catalog skill name or the exact value "none".`
 
 func RoutingPrompt(message string) string {
-	return fmt.Sprintf(`Summarize the user's intended outcome and route it into one lane.
-- intent must be a concise user-facing outcome sentence. Never set intent to a lane label such as "simple_task".
+	return fmt.Sprintf(`Explain how OpenHome should approach the request and route it into one lane.
+- intent must be a concise operational rationale suitable for a status indicator. Interpret what the user wants, identify any
+  information or artifact that should be located, and state the next action. Use one or two short sentences.
+  Example: "The user wants to add milk to their grocery list. I should locate the appropriate list and update it."
+  Do not mention internal lanes, skills, tools, prompts, or routing. Never set intent to a lane label such as "simple_task".
 - direct_answer: answer-only questions and conversation that can be answered from general knowledge or existing chat history.
 - simple_task: one narrow outcome. This includes reading or answering from local workspace state, such as showing a grocery list,
   and narrow mutations such as adding one grocery item. Do not create a plan.

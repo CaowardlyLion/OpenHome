@@ -10,7 +10,7 @@
 | `OPENHOME_MAX_TOOL_ROUNDS` | `8` | Maximum native tool rounds per outcome. |
 | `OPENHOME_MAX_STEP_ATTEMPTS` | `3` | Deprecated compatibility setting from the per-step verifier runtime. |
 | `OPENHOME_PERMISSION_MODE` | `default` | Startup advanced-tool policy: `ask`, `default`, or `allow`. |
-| `OPENHOME_SEARCH_ENDPOINT` | DuckDuckGo HTML | Search adapter endpoint for `webSearch`. |
+| `OPENHOME_SEARCH_ENDPOINT` | Bing RSS | Search adapter endpoint for `webSearch`. |
 
 Each request gets an append-only JSONL log under `.openhome/runs/`. Logs include
 routes, plans, skill selection, native assistant messages, tool results,

@@ -2,6 +2,7 @@ package definitions
 
 import (
 	"context"
+	"encoding/xml"
 	"fmt"
 	"html"
 	"net/http"
@@ -18,6 +19,10 @@ type SearchProvider interface {
 }
 
 type DuckDuckGoHTML struct {
+	Endpoint string
+}
+
+type BingRSS struct {
 	Endpoint string
 }
 
@@ -59,7 +64,10 @@ func (provider DuckDuckGoHTML) Search(ctx context.Context, client *http.Client, 
 	if endpoint == "" {
 		endpoint = "https://html.duckduckgo.com/html/"
 	}
-	requestURL := endpoint + "?q=" + url.QueryEscape(query)
+	requestURL, err := searchURL(endpoint, query)
+	if err != nil {
+		return nil, err
+	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
 	if err != nil {
 		return nil, err
@@ -73,11 +81,79 @@ func (provider DuckDuckGoHTML) Search(ctx context.Context, client *http.Client, 
 	if err != nil {
 		return nil, err
 	}
-	return parseDuckDuckGo(string(content), count), nil
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("search provider returned %s", response.Status)
+	}
+	results := parseDuckDuckGo(string(content), count)
+	if len(results) == 0 {
+		return nil, fmt.Errorf("search provider returned no parseable results")
+	}
+	return results, nil
 }
 
 var resultPattern = regexp.MustCompile(`(?s)<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>(.*?)</a>.*?<a[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>`)
 var tagsPattern = regexp.MustCompile(`<[^>]+>`)
+
+func (provider BingRSS) Search(ctx context.Context, client *http.Client, query string, count int) ([]map[string]string, error) {
+	endpoint := provider.Endpoint
+	if endpoint == "" {
+		endpoint = "https://www.bing.com/search?format=rss"
+	}
+	requestURL, err := searchURL(endpoint, query)
+	if err != nil {
+		return nil, err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("search provider returned %s", response.Status)
+	}
+	content, _, err := readLimited(response.Body, 2<<20)
+	if err != nil {
+		return nil, err
+	}
+	var feed struct {
+		Items []struct {
+			Title       string `xml:"title"`
+			Link        string `xml:"link"`
+			Description string `xml:"description"`
+		} `xml:"channel>item"`
+	}
+	if err := xml.Unmarshal(content, &feed); err != nil {
+		return nil, fmt.Errorf("decode search provider response: %w", err)
+	}
+	results := make([]map[string]string, 0, min(count, len(feed.Items)))
+	for _, item := range feed.Items {
+		if len(results) == count {
+			break
+		}
+		results = append(results, map[string]string{
+			"title": cleanHTML(item.Title), "url": strings.TrimSpace(item.Link), "snippet": cleanHTML(item.Description),
+		})
+	}
+	if len(results) == 0 {
+		return nil, fmt.Errorf("search provider returned no results")
+	}
+	return results, nil
+}
+
+func searchURL(endpoint, query string) (string, error) {
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return "", fmt.Errorf("invalid search endpoint: %w", err)
+	}
+	values := parsed.Query()
+	values.Set("q", query)
+	parsed.RawQuery = values.Encode()
+	return parsed.String(), nil
+}
 
 func parseDuckDuckGo(content string, count int) []map[string]string {
 	var results []map[string]string

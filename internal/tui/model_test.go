@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/CaowardlyLion/OpenHome/internal/agents"
 	"github.com/CaowardlyLion/OpenHome/internal/permissions"
@@ -135,5 +136,24 @@ func TestModelResolvesInlineApproval(t *testing.T) {
 	model = updated.(Model)
 	if decision := <-response; decision != permissions.AllowSimilar {
 		t.Fatalf("decision = %s", decision)
+	}
+}
+
+func TestModelWrapsContentToTerminalWidth(t *testing.T) {
+	model := New(&fakeHandler{})
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 24, Height: 18})
+	model = updated.(Model)
+	model.appendTranscript("assistant", "This is a long response containing enough words to wrap across terminal lines.")
+	model.busy = true
+	model.status = "Searching the internet for current information about a long request"
+	model.approval = &permissions.Pending{
+		Request: permissions.Request{
+			Tool: "fetchURL", Reason: "Need current information from an external website", Target: "https://example.com/a/very/long/path",
+		},
+	}
+	for _, line := range strings.Split(model.View().Content, "\n") {
+		if width := lipgloss.Width(line); width > model.width {
+			t.Fatalf("line width = %d, terminal width = %d, line = %q", width, model.width, line)
+		}
 	}
 }

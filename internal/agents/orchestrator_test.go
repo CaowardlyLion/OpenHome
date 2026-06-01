@@ -112,6 +112,15 @@ func TestCompletionPromptSaysHiddenTraceWasNotShownToUser(t *testing.T) {
 	}
 }
 
+func TestRoutingPromptRequestsOperationalRationale(t *testing.T) {
+	prompt := RoutingPrompt("could you add milk?")
+	for _, expected := range []string{"concise operational rationale", "locate the appropriate list and update it", "Do not mention internal lanes"} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("prompt missing %q: %s", expected, prompt)
+		}
+	}
+}
+
 func TestSimpleTaskUsesNativeToolsWithoutPlan(t *testing.T) {
 	provider := &fakeProvider{
 		structured: []structuredReply{

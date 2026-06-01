@@ -2,6 +2,7 @@ package openai
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -20,10 +21,21 @@ func TestClientReportsEndpointError(t *testing.T) {
 
 func TestStructuredRetriesPlainTextResponse(t *testing.T) {
 	requests := 0
-	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		requests++
+		var body struct {
+			Messages []Message `json:"messages"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
 		content := "I ignored JSON."
 		if requests == 2 {
+			for _, message := range body.Messages {
+				if message.Role == "assistant" && message.Content == "I ignored JSON." {
+					t.Fatal("retry included malformed assistant prose")
+				}
+			}
 			content = `{"answer":"ok"}`
 		}
 		fmt.Fprintf(response, `{"choices":[{"message":{"role":"assistant","content":%q}}]}`, content)

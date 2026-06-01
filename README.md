@@ -24,7 +24,7 @@ OPENHOME_WORKSPACE=./workspace
 OPENHOME_MAX_TOOL_ROUNDS=8
 OPENHOME_MAX_STEP_ATTEMPTS=3
 OPENHOME_PERMISSION_MODE=default
-OPENHOME_SEARCH_ENDPOINT=https://html.duckduckgo.com/html/
+OPENHOME_SEARCH_ENDPOINT=https://www.bing.com/search?format=rss
 ```
 
 `OPENHOME_MAX_STEP_ATTEMPTS` remains accepted for compatibility with existing

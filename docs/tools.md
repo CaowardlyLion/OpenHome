@@ -19,7 +19,7 @@ traversal, parent symlink escapes, and writes through symlinked output files.
 - `runCommand`: run one binary directly from workspace cwd. No shell pipes or redirection.
 - `fetchURL`: fetch approved HTTP(S) text, capped at 2 MB.
 - `downloadFile`: save approved HTTP(S) response inside workspace, capped at 50 MB.
-- `webSearch`: search through provider-neutral adapter. Default is DuckDuckGo HTML.
+- `webSearch`: search through provider-neutral adapter. Default is Bing RSS.
 
 Advanced tools require agent-supplied reason. Prompt choices: allow once,
 always allow similar for current process, or deny.

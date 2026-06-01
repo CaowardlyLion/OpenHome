@@ -20,7 +20,7 @@ func advancedRegistry(t *testing.T, serverURL string) (*tools.Registry, string) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	definitions := []tools.Definition{ReadExternalFile(), RunCommand(), FetchURL(), DownloadFile(), WebSearch(DuckDuckGoHTML{Endpoint: serverURL})}
+	definitions := []tools.Definition{ReadExternalFile(), RunCommand(), FetchURL(), DownloadFile(), WebSearch(BingRSS{Endpoint: serverURL})}
 	registry, err := tools.NewRegistry(root, manager, definitions)
 	if err != nil {
 		t.Fatal(err)
@@ -45,8 +45,8 @@ func TestReadExternalFileAndRunCommand(t *testing.T) {
 func TestFetchDownloadAndSearch(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.URL.Path == "/html/" {
-			response.Header().Set("Content-Type", "text/html")
-			response.Write([]byte(`<a class="result__a" href="https://example.com">Example</a><a class="result__snippet">Useful result</a>`))
+			response.Header().Set("Content-Type", "application/rss+xml")
+			response.Write([]byte(`<rss><channel><item><title>Example</title><link>https://example.com</link><description>Useful result</description></item></channel></rss>`))
 			return
 		}
 		response.Header().Set("Content-Type", "text/plain")
@@ -68,6 +68,18 @@ func TestFetchDownloadAndSearch(t *testing.T) {
 	search, err := registry.Execute(context.Background(), "webSearch", `{"query":"test","reason":"research"}`)
 	if err != nil || len(search.Result.([]map[string]string)) != 1 {
 		t.Fatalf("search = %#v, %v", search, err)
+	}
+}
+
+func TestDuckDuckGoChallengeReturnsError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.WriteHeader(http.StatusAccepted)
+		response.Write([]byte(`<div class="anomaly-modal__title">Unfortunately, bots use DuckDuckGo too.</div>`))
+	}))
+	defer server.Close()
+	_, err := (DuckDuckGoHTML{Endpoint: server.URL}).Search(context.Background(), http.DefaultClient, "test", 5)
+	if err == nil || !strings.Contains(err.Error(), "202 Accepted") {
+		t.Fatalf("error = %v", err)
 	}
 }
 

@@ -70,8 +70,7 @@ func (c *Client) Structured(ctx context.Context, system string, history []Messag
 			decodeErr = err
 		}
 		messages = append(messages,
-			Message{Role: "assistant", Content: content},
-			Message{Role: "user", Content: "Your previous response was not valid JSON. Reply with only one JSON object matching the requested schema. Do not include prose, Markdown fences, or commentary."},
+			Message{Role: "user", Content: "Respond to the original request now. Output only one JSON object matching the requested schema. Do not discuss formatting, prior responses, corrections, Markdown fences, or commentary."},
 		)
 	}
 	return fmt.Errorf("decode structured response after retry: %w", decodeErr)
