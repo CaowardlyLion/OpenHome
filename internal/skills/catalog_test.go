@@ -1,0 +1,36 @@
+package skills_test
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/CaowardlyLion/OpenHome/internal/skills"
+)
+
+func TestLoadCatalog(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "planning", "tasks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(root, "INDEX.md"), []byte("# Root"), 0o644)
+	os.WriteFile(filepath.Join(root, "planning", "INDEX.md"), []byte("# Planning"), 0o644)
+	os.WriteFile(filepath.Join(root, "planning", "tasks", "SKILL.md"), []byte("---\nname: tasks\ndescription: Make tasks\nallowedTools:\n  - writeFile\n---\n# Tasks"), 0o644)
+	catalog, err := skills.Load(root, []string{"writeFile"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.Skills) != 1 || catalog.Skills[0].Name != "tasks" || !strings.Contains(catalog.LibrarianContext, "planning/INDEX.md") {
+		t.Fatalf("catalog = %#v", catalog)
+	}
+}
+
+func TestLoadCatalogRejectsUnknownTool(t *testing.T) {
+	root := t.TempDir()
+	os.MkdirAll(filepath.Join(root, "bad"), 0o755)
+	os.WriteFile(filepath.Join(root, "bad", "SKILL.md"), []byte("---\nname: bad\ndescription: Bad\nallowedTools:\n  - runShell\n---\n# Bad"), 0o644)
+	if _, err := skills.Load(root, []string{"writeFile"}); err == nil || !strings.Contains(err.Error(), "unknown tool") {
+		t.Fatalf("error = %v", err)
+	}
+}

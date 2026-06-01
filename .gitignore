@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.openhome/
+.cache/
+bin/
+.legacy-typescript/
