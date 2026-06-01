@@ -66,7 +66,7 @@ func fixture(t *testing.T, provider *fakeProvider) (*Orchestrator, config.Config
 	t.Helper()
 	root := t.TempDir()
 	cfg := config.Config{WorkspaceDir: filepath.Join(root, "workspace"), RunsDir: filepath.Join(root, "runs"), MaxToolRounds: 6}
-	registry, err := tools.NewRegistry(cfg.WorkspaceDir, definitions.All())
+	registry, err := tools.NewRegistry(cfg.WorkspaceDir, nil, definitions.All())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,6 +96,19 @@ func TestDirectAnswerStreamsAndSynthesizesCompletion(t *testing.T) {
 	}
 	if len(provider.requests) != 3 || provider.requests[2].name != "completion_report" {
 		t.Fatalf("requests = %#v", provider.requests)
+	}
+}
+
+func TestCompletionPromptSaysHiddenTraceWasNotShownToUser(t *testing.T) {
+	prompt := CompletionPrompt("suggest a recipe")
+	for _, expected := range []string{
+		"The user has not seen prior executor replies, tool calls, tool outputs, or trace messages.",
+		"includes that content directly",
+		"include the actual useful content",
+	} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("prompt missing %q: %s", expected, prompt)
+		}
 	}
 }
 
@@ -131,6 +144,9 @@ func TestSimpleTaskUsesNativeToolsWithoutPlan(t *testing.T) {
 	complete := provider.requests[2]
 	if !hasTool(complete.tools, "writeFile") || !hasTool(complete.tools, "request_skill_reselection") || !hasTool(complete.tools, "request_verification") {
 		t.Fatalf("tools = %#v", complete.tools)
+	}
+	if !hasTool(complete.tools, "runCommand") || !hasTool(complete.tools, "webSearch") || !hasTool(complete.tools, "readExternalFile") {
+		t.Fatalf("advanced tools not exposed globally: %#v", complete.tools)
 	}
 }
 
@@ -192,6 +208,40 @@ func TestLibrarianRetriesEmptySkillChoice(t *testing.T) {
 	}
 	if skillChoices != 2 {
 		t.Fatalf("skill choices = %d", skillChoices)
+	}
+}
+
+func TestLibrarianAcceptsNoApplicableSkill(t *testing.T) {
+	provider := &fakeProvider{
+		structured: []structuredReply{
+			{"route_decision", RouteDecision{Intent: "Write a generic note.", Lane: SimpleTask, Verification: VerifyNone, Reason: "narrow"}},
+			{"skill_choice", SkillChoice{SkillName: "none", Reason: "No catalog skill applies."}},
+			{"completion_report", CompletionReport{Summary: "Note written."}},
+		},
+		completes: []openai.Message{
+			{Role: "assistant", ToolCalls: []openai.ToolCall{call("1", "writeFile", `{"path":"note.md","content":"hello"}`)}},
+			{Role: "assistant", Content: "Note written."},
+		},
+	}
+	orchestrator, cfg := fixture(t, provider)
+	if _, err := orchestrator.Handle(context.Background(), "write a generic note"); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(filepath.Join(cfg.WorkspaceDir, "note.md"))
+	if err != nil || string(content) != "hello" {
+		t.Fatalf("content = %q, %v", content, err)
+	}
+	skillChoices := 0
+	for _, request := range provider.requests {
+		if request.name == "skill_choice" {
+			skillChoices++
+		}
+	}
+	if skillChoices != 1 {
+		t.Fatalf("skill choices = %d", skillChoices)
+	}
+	if !containsText(provider.requests[2].history, "Selected skill: none") {
+		t.Fatalf("executor history = %#v", provider.requests[2].history)
 	}
 }
 

@@ -35,6 +35,8 @@ type Orchestrator struct {
 	session *session.Session
 }
 
+const noSkillName = "none"
+
 func NewOrchestrator(client Provider, catalog skills.Catalog, cfg config.Config, registry *tools.Registry, status func(StatusEvent)) *Orchestrator {
 	if status == nil {
 		status = func(StatusEvent) {}
@@ -48,6 +50,10 @@ func (o *Orchestrator) NewSession() {
 
 func (o *Orchestrator) Handle(ctx context.Context, userMessage string) (result Result, err error) {
 	logger := runlog.NewRunLogger(o.config.RunsDir)
+	if manager := o.tools.Permissions(); manager != nil {
+		manager.SetAudit(func(event string, data any) { _ = logger.Append(event, data) })
+		defer manager.SetAudit(nil)
+	}
 	result.LogPath = logger.FilePath
 	_ = logger.Append("user_message", map[string]any{"content": userMessage})
 	history := o.session.History()
@@ -194,14 +200,19 @@ func (o *Orchestrator) selectSkill(ctx context.Context, history, run []openai.Me
 		if err = o.client.Structured(ctx, LibrarianSystem, active(history, run), prompt, "skill_choice", SkillChoiceSchema(), &choice); err != nil {
 			return nil, run, err
 		}
-		skill, err = o.catalog.Find(choice.SkillName)
+		if choice.SkillName == noSkillName {
+			skill = skills.Skill{Name: noSkillName, Content: "No specialized skill applies. Use the registered tools and general reasoning needed for the outcome."}
+			err = nil
+		} else {
+			skill, err = o.catalog.Find(choice.SkillName)
+		}
 		if err == nil {
 			break
 		}
 		if attempt == 2 {
 			return nil, run, err
 		}
-		prompt += "\nPrevious response used an empty or unknown skillName. Return exactly one non-empty skillName from the catalog."
+		prompt += "\nPrevious response used an empty or unknown skillName. Return exactly one catalog skillName, or \"none\" when no catalog skill applies."
 	}
 	event := map[string]any{"stepId": step.ID, "skillName": choice.SkillName, "reason": choice.Reason}
 	_ = logger.Append("skill_selected", event)
@@ -211,7 +222,7 @@ func (o *Orchestrator) selectSkill(ctx context.Context, history, run []openai.Me
 }
 
 func (o *Orchestrator) execute(ctx context.Context, history, run []openai.Message, logger *runlog.RunLogger, task string, step Step, skill skills.Skill, policy VerificationPolicy) ([]openai.Message, VerificationPolicy, string, error) {
-	nativeTools, err := o.tools.OpenAITools(skill.AllowedTools)
+	nativeTools, err := o.tools.AllOpenAITools()
 	if err != nil {
 		return run, policy, "", err
 	}
@@ -270,7 +281,7 @@ func (o *Orchestrator) execute(ctx context.Context, history, run []openai.Messag
 				o.emit("retry", rejection["error"].(string))
 				continue
 			}
-			execution, executeErr := o.tools.Execute(call.Function.Name, call.Function.Arguments, skill.AllowedTools)
+			execution, executeErr := o.tools.Execute(ctx, call.Function.Name, call.Function.Arguments)
 			var output any = execution
 			if executeErr != nil {
 				output = map[string]any{"rejected": true, "error": executeErr.Error()}

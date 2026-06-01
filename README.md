@@ -23,6 +23,8 @@ OPENHOME_SKILLS_DIR=./skills
 OPENHOME_WORKSPACE=./workspace
 OPENHOME_MAX_TOOL_ROUNDS=8
 OPENHOME_MAX_STEP_ATTEMPTS=3
+OPENHOME_PERMISSION_MODE=default
+OPENHOME_SEARCH_ENDPOINT=https://html.duckduckgo.com/html/
 ```
 
 `OPENHOME_MAX_STEP_ATTEMPTS` remains accepted for compatibility with existing
@@ -30,12 +32,15 @@ launch scripts. The Go runtime uses one optional final verifier instead of
 per-step retries.
 
 Type `/new` to clear chat context. Type `/verbose` to show or hide live execution
-details. Type `/exit` to leave the TUI. Press `Ctrl+C` during a task to cancel
+details. Type `/permissions` to choose advanced-tool approval mode. Type `/exit` to leave the TUI. Press `Ctrl+C` during a task to cancel
 its context while preserving the JSONL event log under `.openhome/runs/`.
 
 OpenHome routes requests through `direct_answer`, `simple_task`, or
 `planned_task`. Task execution uses native OpenAI tool calls. Final verification
 runs only when the router or executor requests it.
+
+Advanced tools can read external files, run commands, fetch URLs, download files,
+and search the web. Risky operations pause for explicit approval.
 
 ## Verify
 
@@ -56,6 +61,7 @@ internal/
   commands/     declarative TUI commands
   config/       environment loading
   logging/      append-only JSONL logs
+  permissions/  advanced-tool approval policy
   providers/    OpenAI-compatible client
   session/      native message history
   skills/       Markdown skill loading and validation

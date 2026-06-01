@@ -1,6 +1,7 @@
 package definitions
 
 import (
+	"context"
 	"os"
 
 	"github.com/CaowardlyLion/OpenHome/internal/tools"
@@ -9,7 +10,8 @@ import (
 func ListFiles() tools.Definition {
 	return tools.Definition{
 		Name: "listFiles", Description: "List files and directories in the workspace.", Parameters: pathSchema(false),
-		Execute: func(workspace tools.Workspace, args map[string]any) (any, error) {
+		Execute: func(_ context.Context, toolContext tools.Context, args map[string]any) (any, error) {
+			workspace := toolContext.Workspace
 			name := "."
 			if value, ok := args["path"]; ok {
 				var valid bool

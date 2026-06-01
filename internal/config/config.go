@@ -8,13 +8,15 @@ import (
 )
 
 type Config struct {
-	OpenAIBaseURL string
-	OpenAIModel   string
-	OpenAIAPIKey  string
-	SkillsDir     string
-	WorkspaceDir  string
-	RunsDir       string
-	MaxToolRounds int
+	OpenAIBaseURL  string
+	OpenAIModel    string
+	OpenAIAPIKey   string
+	SkillsDir      string
+	WorkspaceDir   string
+	RunsDir        string
+	RuntimeDir     string
+	PermissionMode string
+	MaxToolRounds  int
 	// Deprecated: retained for launch-script compatibility after per-step verification removal.
 	MaxStepAttempts int
 }
@@ -43,6 +45,8 @@ func LoadFrom(cwd string) (Config, error) {
 		SkillsDir:       resolve(cwd, env("OPENHOME_SKILLS_DIR", "skills")),
 		WorkspaceDir:    resolve(cwd, env("OPENHOME_WORKSPACE", "workspace")),
 		RunsDir:         resolve(cwd, ".openhome/runs"),
+		RuntimeDir:      resolve(cwd, ".openhome"),
+		PermissionMode:  env("OPENHOME_PERMISSION_MODE", "default"),
 		MaxToolRounds:   rounds,
 		MaxStepAttempts: attempts,
 	}, nil

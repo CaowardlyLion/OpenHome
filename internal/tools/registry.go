@@ -1,17 +1,27 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 
+	"github.com/CaowardlyLion/OpenHome/internal/permissions"
 	"github.com/CaowardlyLion/OpenHome/internal/providers/openai"
 )
+
+type Context struct {
+	Workspace   Workspace
+	Permissions *permissions.Manager
+	HTTPClient  *http.Client
+}
 
 type Definition struct {
 	Name        string
 	Description string
 	Parameters  map[string]any
-	Execute     func(Workspace, map[string]any) (any, error)
+	Advanced    bool
+	Execute     func(context.Context, Context, map[string]any) (any, error)
 }
 
 type Execution struct {
@@ -21,13 +31,13 @@ type Execution struct {
 }
 
 type Registry struct {
-	workspace   Workspace
+	context     Context
 	definitions map[string]Definition
 	names       []string
 }
 
-func NewRegistry(workspaceDir string, definitions []Definition) (*Registry, error) {
-	registry := &Registry{workspace: Workspace{Root: workspaceDir}, definitions: map[string]Definition{}}
+func NewRegistry(workspaceDir string, permissionManager *permissions.Manager, definitions []Definition) (*Registry, error) {
+	registry := &Registry{context: Context{Workspace: Workspace{Root: workspaceDir}, Permissions: permissionManager, HTTPClient: http.DefaultClient}, definitions: map[string]Definition{}}
 	for _, definition := range definitions {
 		if _, ok := registry.definitions[definition.Name]; ok {
 			return nil, fmt.Errorf("duplicate tool name: %s", definition.Name)
@@ -40,6 +50,10 @@ func NewRegistry(workspaceDir string, definitions []Definition) (*Registry, erro
 
 func (r *Registry) Names() []string {
 	return append([]string(nil), r.names...)
+}
+
+func (r *Registry) Permissions() *permissions.Manager {
+	return r.context.Permissions
 }
 
 func (r *Registry) OpenAITools(allowed []string) ([]openai.Tool, error) {
@@ -56,10 +70,7 @@ func (r *Registry) OpenAITools(allowed []string) ([]openai.Tool, error) {
 	return result, nil
 }
 
-func (r *Registry) Execute(name, arguments string, allowed []string) (Execution, error) {
-	if !contains(allowed, name) {
-		return Execution{}, fmt.Errorf("tool %s is not allowed; allowed tools: %v", name, allowed)
-	}
+func (r *Registry) Execute(ctx context.Context, name, arguments string) (Execution, error) {
 	definition, ok := r.definitions[name]
 	if !ok {
 		return Execution{}, fmt.Errorf("tool %s is unavailable", name)
@@ -75,18 +86,13 @@ func (r *Registry) Execute(name, arguments string, allowed []string) (Execution,
 			args["path"] = alias
 		}
 	}
-	result, err := definition.Execute(r.workspace, args)
+	result, err := definition.Execute(ctx, r.context, args)
 	if err != nil {
 		return Execution{}, err
 	}
 	return Execution{Tool: name, Args: args, Result: result}, nil
 }
 
-func contains(items []string, wanted string) bool {
-	for _, item := range items {
-		if item == wanted {
-			return true
-		}
-	}
-	return false
+func (r *Registry) AllOpenAITools() ([]openai.Tool, error) {
+	return r.OpenAITools(r.Names())
 }

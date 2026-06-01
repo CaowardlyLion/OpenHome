@@ -1,6 +1,7 @@
 package tools_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,7 +14,7 @@ import (
 func registry(t *testing.T) (*tools.Registry, string) {
 	t.Helper()
 	root := t.TempDir()
-	result, err := tools.NewRegistry(root, definitions.All())
+	result, err := tools.NewRegistry(root, nil, definitions.All())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -22,14 +23,14 @@ func registry(t *testing.T) (*tools.Registry, string) {
 
 func TestRegistryWritesReadsAndAcceptsAlias(t *testing.T) {
 	registry, root := registry(t)
-	if _, err := registry.Execute("writeFile", `{"path":"plans/week.md","content":"# Week"}`, []string{"writeFile"}); err != nil {
+	if _, err := registry.Execute(context.Background(), "writeFile", `{"path":"plans/week.md","content":"# Week"}`); err != nil {
 		t.Fatal(err)
 	}
 	content, err := os.ReadFile(filepath.Join(root, "plans/week.md"))
 	if err != nil || string(content) != "# Week" {
 		t.Fatalf("write result = %q, %v", content, err)
 	}
-	result, err := registry.Execute("readFile", `{"file_path":"plans/week.md"}`, []string{"readFile"})
+	result, err := registry.Execute(context.Background(), "readFile", `{"file_path":"plans/week.md"}`)
 	if err != nil || result.Result != "# Week" {
 		t.Fatalf("read result = %#v, %v", result.Result, err)
 	}
@@ -39,15 +40,13 @@ func TestRegistryRejectsUnsafePathsAndTools(t *testing.T) {
 	registry, _ := registry(t)
 	cases := []struct {
 		tool, args string
-		allowed    []string
 		want       string
 	}{
-		{"writeFile", `{"path":"../escape.md","content":"bad"}`, []string{"writeFile"}, "path escapes workspace"},
-		{"readFile", `{"path":"/etc/passwd"}`, []string{"readFile"}, "absolute paths"},
-		{"readFile", `{"path":"x"}`, []string{"writeFile"}, "not allowed"},
+		{"writeFile", `{"path":"../escape.md","content":"bad"}`, "path escapes workspace"},
+		{"readFile", `{"path":"/etc/passwd"}`, "absolute paths"},
 	}
 	for _, test := range cases {
-		_, err := registry.Execute(test.tool, test.args, test.allowed)
+		_, err := registry.Execute(context.Background(), test.tool, test.args)
 		if err == nil || !strings.Contains(err.Error(), test.want) {
 			t.Fatalf("%s error = %v, want %q", test.tool, err, test.want)
 		}
@@ -60,7 +59,7 @@ func TestRegistryRejectsSymlinkEscapes(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(root, "linked")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := registry.Execute("writeFile", `{"path":"linked/escape.md","content":"bad"}`, []string{"writeFile"}); err == nil || !strings.Contains(err.Error(), "resolved path escapes workspace") {
+	if _, err := registry.Execute(context.Background(), "writeFile", `{"path":"linked/escape.md","content":"bad"}`); err == nil || !strings.Contains(err.Error(), "resolved path escapes workspace") {
 		t.Fatalf("parent symlink error = %v", err)
 	}
 	target := filepath.Join(outside, "secret.md")
@@ -70,7 +69,7 @@ func TestRegistryRejectsSymlinkEscapes(t *testing.T) {
 	if err := os.Symlink(target, filepath.Join(root, "output.md")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := registry.Execute("writeFile", `{"path":"output.md","content":"bad"}`, []string{"writeFile"}); err == nil || !strings.Contains(err.Error(), "writing through symlinks") {
+	if _, err := registry.Execute(context.Background(), "writeFile", `{"path":"output.md","content":"bad"}`); err == nil || !strings.Contains(err.Error(), "writing through symlinks") {
 		t.Fatalf("file symlink error = %v", err)
 	}
 }

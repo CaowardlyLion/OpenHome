@@ -5,9 +5,10 @@ import "fmt"
 type Action string
 
 const (
-	NewSession Action = "new_session"
-	Verbose    Action = "verbose"
-	Exit       Action = "exit"
+	NewSession  Action = "new_session"
+	Verbose     Action = "verbose"
+	Permissions Action = "permissions"
+	Exit        Action = "exit"
 )
 
 type Command struct {
@@ -37,6 +38,7 @@ func Default() *Registry {
 	registry, _ := New([]Command{
 		{Name: "/new", Description: "Clear chat context and start a new session.", Action: NewSession},
 		{Name: "/verbose", Description: "Show or hide execution details.", Action: Verbose},
+		{Name: "/permissions", Description: "Choose advanced-tool permission mode.", Action: Permissions},
 		{Name: "/exit", Description: "Quit OpenHome.", Action: Exit},
 	})
 	return registry

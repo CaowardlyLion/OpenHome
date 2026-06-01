@@ -13,6 +13,7 @@ import (
 
 	"github.com/CaowardlyLion/OpenHome/internal/agents"
 	"github.com/CaowardlyLion/OpenHome/internal/commands"
+	"github.com/CaowardlyLion/OpenHome/internal/permissions"
 )
 
 type Handler interface {
@@ -21,27 +22,35 @@ type Handler interface {
 }
 
 type Model struct {
-	handler    Handler
-	commands   *commands.Registry
-	viewport   viewport.Model
-	input      textarea.Model
-	spinner    spinner.Model
-	transcript []string
-	status     string
-	busy       bool
-	verbose    bool
-	cancel     context.CancelFunc
-	width      int
-	height     int
+	handler             Handler
+	commands            *commands.Registry
+	viewport            viewport.Model
+	input               textarea.Model
+	spinner             spinner.Model
+	transcript          []string
+	status              string
+	busy                bool
+	verbose             bool
+	permissions         *permissions.Manager
+	prompter            *permissions.ChannelPrompter
+	approval            *permissions.Pending
+	approvalChoice      int
+	choosingPermissions bool
+	permissionChoice    int
+	confirmAllow        bool
+	cancel              context.CancelFunc
+	width               int
+	height              int
 }
 
 type StatusMsg agents.StatusEvent
+type approvalMsg permissions.Pending
 type resultMsg struct {
 	result agents.Result
 	err    error
 }
 
-func New(handler Handler) Model {
+func New(handler Handler, options ...any) Model {
 	input := textarea.New()
 	input.Placeholder = "Ask OpenHome..."
 	input.ShowLineNumbers = false
@@ -52,13 +61,21 @@ func New(handler Handler) Model {
 		spinner: spinner.New(), transcript: []string{"OpenHome", "Type a request or use /new and /exit."},
 		width: 80, height: 24,
 	}
+	for _, option := range options {
+		switch value := option.(type) {
+		case *permissions.Manager:
+			model.permissions = value
+		case *permissions.ChannelPrompter:
+			model.prompter = value
+		}
+	}
 	model.resize()
 	model.viewport.SetContent(strings.Join(model.transcript, "\n\n"))
 	return model
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.spinner.Tick, m.input.Focus())
+	return tea.Batch(m.spinner.Tick, m.input.Focus(), waitForApproval(m.prompter))
 }
 
 func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
@@ -68,6 +85,58 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = message.Width, message.Height
 		m.resize()
 	case tea.KeyPressMsg:
+		if m.approval != nil {
+			switch message.String() {
+			case "up":
+				m.approvalChoice = max(0, m.approvalChoice-1)
+				return m, nil
+			case "down":
+				m.approvalChoice = min(2, m.approvalChoice+1)
+				return m, nil
+			case "enter":
+				return m.resolveApproval([]permissions.Decision{permissions.AllowOnce, permissions.AllowSimilar, permissions.Deny}[m.approvalChoice])
+			case "1", "a":
+				return m.resolveApproval(permissions.AllowOnce)
+			case "2", "s":
+				return m.resolveApproval(permissions.AllowSimilar)
+			case "3", "d", "esc":
+				return m.resolveApproval(permissions.Deny)
+			}
+			return m, nil
+		}
+		if m.confirmAllow {
+			switch message.String() {
+			case "y", "enter":
+				if m.permissions != nil {
+					_ = m.permissions.SetMode(permissions.Allow)
+				}
+				m.confirmAllow = false
+				m.appendTranscript("system", "Permission mode set to allow.")
+			case "n", "esc":
+				m.confirmAllow = false
+			}
+			return m, nil
+		}
+		if m.choosingPermissions {
+			switch message.String() {
+			case "up":
+				m.permissionChoice = max(0, m.permissionChoice-1)
+			case "down":
+				m.permissionChoice = min(2, m.permissionChoice+1)
+			case "enter":
+				m.choosePermissionMode()
+			case "1", "a":
+				m.setPermissionMode(permissions.Ask)
+			case "2", "d":
+				m.setPermissionMode(permissions.Default)
+			case "3", "l":
+				m.choosingPermissions = false
+				m.confirmAllow = true
+			case "esc":
+				m.choosingPermissions = false
+			}
+			return m, nil
+		}
 		switch message.String() {
 		case "ctrl+c":
 			if m.busy && m.cancel != nil {
@@ -86,6 +155,9 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.input.Reset()
+			if strings.HasPrefix(value, "/permissions") {
+				return m.handlePermissionsCommand(value)
+			}
 			if command, ok := m.commands.Lookup(value); ok {
 				if command.Action == commands.Exit {
 					return m, tea.Quit
@@ -122,6 +194,11 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.appendTranscript(event.Type, event.Message)
 			}
 		}
+	case approvalMsg:
+		pending := permissions.Pending(message)
+		m.approval = &pending
+		m.approvalChoice = 0
+		m.status = "Waiting for permission"
 	case resultMsg:
 		m.busy = false
 		m.cancel = nil
@@ -159,8 +236,90 @@ func (m Model) View() tea.View {
 	if m.verbose {
 		verbose = "on"
 	}
-	footer := lipgloss.NewStyle().Faint(true).Render("/new new session  /verbose details:" + verbose + "  /exit quit  Ctrl+C cancel or quit")
-	return tea.NewView(strings.Join([]string{header, m.viewport.View(), status, m.input.View(), footer}, "\n"))
+	mode := permissions.Default
+	if m.permissions != nil {
+		mode = m.permissions.Mode()
+	}
+	footer := lipgloss.NewStyle().Faint(true).Render("/new  /verbose details:" + verbose + "  /permissions:" + string(mode) + "  /exit  Ctrl+C")
+	extra := ""
+	if m.approval != nil {
+		extra = fmt.Sprintf("Permission required: %s\nReason: %s\nTarget: %s\n%s\n%s",
+			m.approval.Request.Tool, m.approval.Request.Reason, m.approval.Request.Target, m.approval.Request.Details,
+			choiceLine(m.approvalChoice, "Allow once", "Always allow similar", "Deny"))
+	} else if m.confirmAllow {
+		extra = "Always allow advanced tools for this process? [y] Confirm  [n] Cancel"
+	} else if m.choosingPermissions {
+		extra = "Permission mode: " + choiceLine(m.permissionChoice, "Always ask", "Default", "Always allow")
+	}
+	return tea.NewView(strings.Join([]string{header, m.viewport.View(), status, extra, m.input.View(), footer}, "\n"))
+}
+
+func (m Model) resolveApproval(decision permissions.Decision) (tea.Model, tea.Cmd) {
+	m.approval.Response <- decision
+	m.approval = nil
+	m.status = "Permission response sent"
+	return m, waitForApproval(m.prompter)
+}
+
+func (m *Model) setPermissionMode(mode permissions.Mode) {
+	if m.permissions != nil {
+		_ = m.permissions.SetMode(mode)
+	}
+	m.choosingPermissions = false
+	m.appendTranscript("system", "Permission mode set to "+string(mode)+".")
+}
+
+func (m Model) handlePermissionsCommand(value string) (tea.Model, tea.Cmd) {
+	fields := strings.Fields(value)
+	if len(fields) == 1 {
+		m.choosingPermissions = true
+		m.permissionChoice = 1
+		return m, nil
+	}
+	mode := permissions.Mode(fields[1])
+	if mode == permissions.Allow {
+		m.confirmAllow = true
+		return m, nil
+	}
+	if mode != permissions.Ask && mode != permissions.Default {
+		m.appendTranscript("error", "Usage: /permissions ask|default|allow")
+		return m, nil
+	}
+	m.setPermissionMode(mode)
+	return m, nil
+}
+
+func (m *Model) choosePermissionMode() {
+	switch m.permissionChoice {
+	case 0:
+		m.setPermissionMode(permissions.Ask)
+	case 1:
+		m.setPermissionMode(permissions.Default)
+	case 2:
+		m.choosingPermissions = false
+		m.confirmAllow = true
+	}
+}
+
+func choiceLine(selected int, choices ...string) string {
+	result := make([]string, len(choices))
+	for index, choice := range choices {
+		prefix := " "
+		if index == selected {
+			prefix = ">"
+		}
+		result[index] = fmt.Sprintf("%s[%d] %s", prefix, index+1, choice)
+	}
+	return strings.Join(result, "  ")
+}
+
+func waitForApproval(prompter *permissions.ChannelPrompter) tea.Cmd {
+	if prompter == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		return approvalMsg(<-prompter.Requests)
+	}
 }
 
 func (m *Model) appendTranscript(label, text string) {

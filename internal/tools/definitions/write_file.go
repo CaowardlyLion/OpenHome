@@ -1,6 +1,7 @@
 package definitions
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 
@@ -14,7 +15,8 @@ func WriteFile() tools.Definition {
 			"type": "object", "additionalProperties": false, "required": []string{"path", "content"},
 			"properties": map[string]any{"path": map[string]any{"type": "string"}, "content": map[string]any{"type": "string"}},
 		},
-		Execute: func(workspace tools.Workspace, args map[string]any) (any, error) {
+		Execute: func(_ context.Context, toolContext tools.Context, args map[string]any) (any, error) {
+			workspace := toolContext.Workspace
 			name, err := stringArg(args, "path")
 			if err != nil {
 				return nil, err

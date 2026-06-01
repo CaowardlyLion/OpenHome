@@ -53,10 +53,33 @@ func New(baseURL, model, apiKey string) *Client {
 }
 
 func (c *Client) Structured(ctx context.Context, system string, history []Message, prompt, name string, schema map[string]any, out any) error {
+	messages := append([]Message{{Role: "system", Content: system}},
+		append(cloneMessages(history), Message{Role: "user", Content: prompt})...)
+	var decodeErr error
+	for attempt := 1; attempt <= 2; attempt++ {
+		content, err := c.structuredContent(ctx, messages, name, schema)
+		if err != nil {
+			return err
+		}
+		if os.Getenv("OPENHOME_DEBUG_STRUCTURED") != "" {
+			fmt.Fprintf(os.Stderr, "[structured:%s] %s\n", name, content)
+		}
+		if err := json.Unmarshal([]byte(jsonContent(content)), out); err == nil {
+			return nil
+		} else {
+			decodeErr = err
+		}
+		messages = append(messages,
+			Message{Role: "assistant", Content: content},
+			Message{Role: "user", Content: "Your previous response was not valid JSON. Reply with only one JSON object matching the requested schema. Do not include prose, Markdown fences, or commentary."},
+		)
+	}
+	return fmt.Errorf("decode structured response after retry: %w", decodeErr)
+}
+
+func (c *Client) structuredContent(ctx context.Context, messages []Message, name string, schema map[string]any) (string, error) {
 	body := map[string]any{
-		"model": c.Model,
-		"messages": append([]Message{{Role: "system", Content: system}},
-			append(cloneMessages(history), Message{Role: "user", Content: prompt})...),
+		"model": c.Model, "messages": messages,
 		"response_format": map[string]any{"type": "json_schema", "json_schema": map[string]any{
 			"name": name, "strict": true, "schema": schema,
 		}},
@@ -64,7 +87,7 @@ func (c *Client) Structured(ctx context.Context, system string, history []Messag
 	}
 	response, err := c.request(ctx, body)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer response.Body.Close()
 	var decoded struct {
@@ -73,18 +96,22 @@ func (c *Client) Structured(ctx context.Context, system string, history []Messag
 		} `json:"choices"`
 	}
 	if err := json.NewDecoder(response.Body).Decode(&decoded); err != nil {
-		return err
+		return "", err
 	}
 	if len(decoded.Choices) == 0 {
-		return fmt.Errorf("OpenAI-compatible response contained no choices")
+		return "", fmt.Errorf("OpenAI-compatible response contained no choices")
 	}
-	if os.Getenv("OPENHOME_DEBUG_STRUCTURED") != "" {
-		fmt.Fprintf(os.Stderr, "[structured:%s] %s\n", name, decoded.Choices[0].Message.Content)
+	return decoded.Choices[0].Message.Content, nil
+}
+
+func jsonContent(content string) string {
+	content = strings.TrimSpace(content)
+	if strings.HasPrefix(content, "```") {
+		content = strings.TrimPrefix(content, "```json")
+		content = strings.TrimPrefix(content, "```")
+		content = strings.TrimSuffix(content, "```")
 	}
-	if err := json.Unmarshal([]byte(decoded.Choices[0].Message.Content), out); err != nil {
-		return fmt.Errorf("decode structured response: %w", err)
-	}
-	return nil
+	return strings.TrimSpace(content)
 }
 
 func (c *Client) Complete(ctx context.Context, system string, messages []Message, tools []Tool) (Message, error) {

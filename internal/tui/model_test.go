@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/CaowardlyLion/OpenHome/internal/agents"
+	"github.com/CaowardlyLion/OpenHome/internal/permissions"
 )
 
 type fakeHandler struct {
@@ -91,5 +92,48 @@ func TestModelCancelsBusyTask(t *testing.T) {
 	model = updated.(Model)
 	if !cancelled || !strings.Contains(model.status, "Cancelling") {
 		t.Fatalf("cancelled = %v, status = %q", cancelled, model.status)
+	}
+}
+
+func TestModelChoosesPermissionModeAndConfirmsAllow(t *testing.T) {
+	manager, err := permissions.New(t.TempDir(), t.TempDir(), permissions.Default, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := New(&fakeHandler{}, manager)
+	model.input.SetValue("/permissions ask")
+	updated, _ := model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	model = updated.(Model)
+	if manager.Mode() != permissions.Ask {
+		t.Fatalf("mode = %s", manager.Mode())
+	}
+	model.input.SetValue("/permissions allow")
+	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	model = updated.(Model)
+	if !model.confirmAllow || manager.Mode() == permissions.Allow {
+		t.Fatalf("confirm = %v, mode = %s", model.confirmAllow, manager.Mode())
+	}
+	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: 'y'}))
+	model = updated.(Model)
+	if manager.Mode() != permissions.Allow || !strings.Contains(model.View().Content, "/permissions:allow") {
+		t.Fatalf("mode = %s, view = %q", manager.Mode(), model.View().Content)
+	}
+}
+
+func TestModelResolvesInlineApproval(t *testing.T) {
+	model := New(&fakeHandler{})
+	response := make(chan permissions.Decision, 1)
+	updated, _ := model.Update(approvalMsg(permissions.Pending{
+		Request:  permissions.Request{Tool: "fetchURL", Reason: "research", Target: "https://example.com"},
+		Response: response,
+	}))
+	model = updated.(Model)
+	if !strings.Contains(model.View().Content, "Permission required: fetchURL") {
+		t.Fatalf("view = %q", model.View().Content)
+	}
+	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: '2', Text: "2"}))
+	model = updated.(Model)
+	if decision := <-response; decision != permissions.AllowSimilar {
+		t.Fatalf("decision = %s", decision)
 	}
 }

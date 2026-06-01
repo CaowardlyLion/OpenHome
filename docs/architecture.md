@@ -11,6 +11,7 @@ internal/
   commands/     TUI command registry
   config/       environment loading
   logging/      append-only run logger
+  permissions/  approval modes, session rules, shell regex policy
   providers/    OpenAI-compatible Chat Completions client
   session/      native message history
   skills/       Markdown skill catalog loader
@@ -26,7 +27,7 @@ internal/
 4. Skip planning for narrow simple tasks.
 5. Build outcome-oriented steps for planned tasks.
 6. Select one skill for the first execution unit and reuse it.
-7. Execute with native OpenAI `tool_calls` and `tool` messages.
+7. Execute with native OpenAI `tool_calls` and `tool` messages. Advanced calls pause for permission when policy requires it.
 8. Reselect only after `request_skill_reselection`.
 9. Escalate optional final verification with `request_verification`.
 10. Produce a completion report and retain native messages in session history.

@@ -2,6 +2,7 @@ package definitions
 
 import (
 	"bufio"
+	"context"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -17,7 +18,8 @@ func SearchFiles() tools.Definition {
 			"type": "object", "additionalProperties": false, "required": []string{"query"},
 			"properties": map[string]any{"query": map[string]any{"type": "string"}, "path": map[string]any{"type": "string"}},
 		},
-		Execute: func(workspace tools.Workspace, args map[string]any) (any, error) {
+		Execute: func(_ context.Context, toolContext tools.Context, args map[string]any) (any, error) {
+			workspace := toolContext.Workspace
 			query, err := stringArg(args, "query")
 			if err != nil {
 				return nil, err
