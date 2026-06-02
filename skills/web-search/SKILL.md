@@ -32,6 +32,13 @@ browser interaction, use `browserInteract`. Do not click buttons that submit
 forms, place orders, send messages, or otherwise create side effects unless the
 user explicitly requested that action and approves the browser interaction.
 
+If the user asks for a specific time-frame, prioritize sources from that period.
+For example, if the user asks "What are the latest developments in X?", prioritize 
+sources from the past few days or weeks. If the user asks "What was the state of Y
+in 2010?", prioritize sources from around that year. Requests for news should be 
+answered with recent sources, and questions regarding things "today" should 
+only be answered with sources from the current day.
+
 ## Completion
 
 Answer from the opened pages. Include useful source URLs and distinguish any
