@@ -28,7 +28,7 @@ type BingRSS struct {
 
 func WebSearch(provider SearchProvider) tools.Definition {
 	return tools.Definition{
-		Name: "webSearch", Advanced: true, Description: "Search the web after user permission. Returns titles, URLs, and snippets.",
+		Name: "webSearch", Advanced: true, Description: "Search the web. Default permission mode allows searches automatically. Returns titles, URLs, and snippets.",
 		Parameters: map[string]any{
 			"type": "object", "additionalProperties": false, "required": []string{"query", "reason"},
 			"properties": map[string]any{

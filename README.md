@@ -22,6 +22,7 @@ OPENAI_API_KEY=
 OPENHOME_SKILLS_DIR=./skills
 OPENHOME_WORKSPACE=./workspace
 OPENHOME_MAX_TOOL_ROUNDS=8
+OPENHOME_MAX_CONTEXT_BYTES=98304
 OPENHOME_MAX_STEP_ATTEMPTS=3
 OPENHOME_PERMISSION_MODE=default
 OPENHOME_SEARCH_ENDPOINT=https://www.bing.com/search?format=rss
@@ -42,8 +43,11 @@ runs only when the router or executor requests it.
 
 Advanced tools can read external files, run commands, fetch compact website text,
 download files, search the web, navigate rendered pages with CloakBrowser, and
-send explicitly requested email through configured SMTP. Risky operations pause
-for explicit approval.
+send explicitly requested email through configured SMTP. In default permission
+mode, web search, static page fetches, and read-only rendered page opens run
+automatically. Browser actions still prompt. Edit
+`.openhome/default-allow-tools.txt` and `.openhome/default-allow-commands.txt`
+to change default-mode rules. Risky operations pause for explicit approval.
 
 Optional CloakBrowser support uses a Python bridge while Go remains the runtime:
 

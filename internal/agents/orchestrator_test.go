@@ -105,10 +105,66 @@ func TestCompletionPromptSaysHiddenTraceWasNotShownToUser(t *testing.T) {
 		"The user has not seen prior executor replies, tool calls, tool outputs, or trace messages.",
 		"includes that content directly",
 		"include the actual useful content",
+		"Every factual URL, headline, quote, and current claim must be grounded",
 	} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("prompt missing %q: %s", expected, prompt)
 		}
+	}
+}
+
+func TestWebSearchSkillRequiresOpenedSourceBeforeCompletion(t *testing.T) {
+	if !requiresOpenedWebSource("web-search", map[string]bool{"webSearch": true}) {
+		t.Fatal("web-search completed from snippets without opening source")
+	}
+	if requiresOpenedWebSource("web-search", map[string]bool{"webSearch": true, "fetchURL": true}) {
+		t.Fatal("fetchURL did not satisfy opened-source requirement")
+	}
+	if requiresOpenedWebSource("web-search", map[string]bool{"webSearch": true, "browserInteract": true}) {
+		t.Fatal("browserInteract did not satisfy opened-source requirement")
+	}
+	if requiresOpenedWebSource("grocery-list", map[string]bool{"webSearch": true}) {
+		t.Fatal("non-web skill unexpectedly requires opened source")
+	}
+}
+
+func TestExecutionPromptFollowsSkillReselectionToolGuidance(t *testing.T) {
+	prompt := ExecutionPrompt("research site", Step{ID: "1", Goal: "Research site"}, skills.Skill{Name: "web-search"})
+	if !strings.Contains(prompt, "When a tool result recommends request_skill_reselection") {
+		t.Fatalf("prompt = %q", prompt)
+	}
+	if !strings.Contains(prompt, "navigationLinks destination matching the user's requested") {
+		t.Fatalf("prompt = %q", prompt)
+	}
+}
+
+func TestRequestedNavigationDestinationMatchesRequestedSection(t *testing.T) {
+	result := map[string]any{
+		"url": "https://example.com/",
+		"navigationLinks": []any{
+			map[string]any{"text": "World", "url": "https://example.com/world/"},
+			map[string]any{"text": "Technology", "url": "https://example.com/technology/"},
+		},
+	}
+	if destination := requestedNavigationDestination("show technology headlines", result); destination != "https://example.com/technology/" {
+		t.Fatalf("destination = %q", destination)
+	}
+	result["url"] = "https://example.com/technology/"
+	if destination := requestedNavigationDestination("show technology headlines", result); destination != "" {
+		t.Fatalf("destination = %q", destination)
+	}
+}
+
+func TestActiveContextDropsOldestMessagesWhenBudgetExceeded(t *testing.T) {
+	recent := openai.Message{Role: "assistant", Content: "recent"}
+	content, _ := json.Marshal([]openai.Message{recent})
+	orchestrator := &Orchestrator{config: config.Config{MaxContextBytes: len(content) + 1}}
+	active := orchestrator.active(
+		[]openai.Message{{Role: "user", Content: "old request that should drop"}},
+		[]openai.Message{recent},
+	)
+	if len(active) != 1 || active[0].Content != recent.Content {
+		t.Fatalf("active = %#v", active)
 	}
 }
 

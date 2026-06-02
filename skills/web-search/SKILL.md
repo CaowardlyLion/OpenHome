@@ -17,14 +17,20 @@ page content to answer the user's actual question. Prefer primary sources when
 available. For time-sensitive facts, check that the source is current and
 cross-check another relevant source when practical.
 
+When the user asks for sources, use the most specific observed URL available.
+For article headlines, prefer the matching article URL from `fetchURL` links
+over a publication homepage or category page.
+
 If a search result page cannot be fetched, try another relevant result. If
 permission is denied or no usable source can be opened, explain that limitation
 instead of presenting search snippets as verified facts.
 
-If a relevant page requires rendered JavaScript or browser interaction, use
-`browserInteract`. Do not click buttons that submit forms, place orders, send
-messages, or otherwise create side effects unless the user explicitly requested
-that action and approves the browser interaction.
+If `fetchURL` reports that static fetching was blocked and recommends
+`browser-navigation`, call `request_skill_reselection` so the librarian can
+select that skill. If a relevant page otherwise requires rendered JavaScript or
+browser interaction, use `browserInteract`. Do not click buttons that submit
+forms, place orders, send messages, or otherwise create side effects unless the
+user explicitly requested that action and approves the browser interaction.
 
 ## Completion
 

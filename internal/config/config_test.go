@@ -19,3 +19,14 @@ func TestLoadFromRejectsInvalidPositiveInteger(t *testing.T) {
 		t.Fatal("expected invalid rounds error")
 	}
 }
+
+func TestLoadFromReadsContextBudget(t *testing.T) {
+	t.Setenv("OPENHOME_MAX_CONTEXT_BYTES", "4096")
+	cfg, err := LoadFrom(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MaxContextBytes != 4096 {
+		t.Fatalf("MaxContextBytes = %d", cfg.MaxContextBytes)
+	}
+}

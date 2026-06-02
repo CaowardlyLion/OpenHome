@@ -8,6 +8,7 @@
 | `OPENHOME_SKILLS_DIR` | `./skills` | Skill catalog directory. |
 | `OPENHOME_WORKSPACE` | `./workspace` | Sandboxed task artifact directory. |
 | `OPENHOME_MAX_TOOL_ROUNDS` | `8` | Maximum native tool rounds per outcome. |
+| `OPENHOME_MAX_CONTEXT_BYTES` | `98304` | Sliding retained-message byte budget. Oldest context drops first when exceeded. |
 | `OPENHOME_MAX_STEP_ATTEMPTS` | `3` | Deprecated compatibility setting from the per-step verifier runtime. |
 | `OPENHOME_PERMISSION_MODE` | `default` | Startup advanced-tool policy: `ask`, `default`, or `allow`. |
 | `OPENHOME_SEARCH_ENDPOINT` | Bing RSS | Search adapter endpoint for `webSearch`. |
@@ -28,12 +29,23 @@ completion. Web fetches insert only compact readable text into context and logs.
 Shell policy files are created under `.openhome/` on first launch:
 
 ```text
+.openhome/default-allow-tools.txt
+.openhome/default-allow-commands.txt
 .openhome/shell-allow.txt
 .openhome/shell-deny.txt
 ```
 
-Each non-comment line is a regular expression matched against normalized shell
-command plus arguments. Deny rules override every mode. Files load at startup.
+`default-allow-tools.txt` contains exact advanced-tool names that run without a
+prompt in `default` mode. It initially allows `webSearch`, `fetchURL`, and
+read-only `browserInteract` opens. Browser actions remain elevated and prompt.
+Add or remove one tool name per line, then restart OpenHome. `ask` mode still
+prompts.
+
+`default-allow-commands.txt` contains editable default-mode shell inspection
+regexes. `shell-allow.txt` adds trusted shell regexes and `shell-deny.txt`
+contains hard denials. Each non-comment shell-policy line is matched against the
+normalized command plus arguments. Deny rules override every mode. Files load
+at startup.
 
 Headless `openhome run` reads `OPENHOME_PERMISSION_MODE`. Approval-required calls
 prompt only when stdin is a terminal; non-interactive runs deny them.

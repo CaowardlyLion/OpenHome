@@ -41,7 +41,7 @@ func NewOrchestrator(client Provider, catalog skills.Catalog, cfg config.Config,
 	if status == nil {
 		status = func(StatusEvent) {}
 	}
-	return &Orchestrator{client: client, catalog: catalog, config: cfg, tools: registry, status: status, session: &session.Session{}}
+	return &Orchestrator{client: client, catalog: catalog, config: cfg, tools: registry, status: status, session: session.New(cfg.MaxContextBytes)}
 }
 
 func (o *Orchestrator) NewSession() {
@@ -116,7 +116,7 @@ func (o *Orchestrator) Handle(ctx context.Context, userMessage string) (result R
 	} else {
 		o.emit("planning", "Creating outcome plan")
 		var plan Plan
-		if err = o.client.Structured(ctx, MainSystem, active(history, run), PlanningPrompt(userMessage), "task_plan", PlanSchema(), &plan); err != nil {
+		if err = o.client.Structured(ctx, MainSystem, o.active(history, run), PlanningPrompt(userMessage), "task_plan", PlanSchema(), &plan); err != nil {
 			return result, err
 		}
 		if len(plan.Steps) == 0 {
@@ -162,7 +162,7 @@ func (o *Orchestrator) Handle(ctx context.Context, userMessage string) (result R
 	if policy == VerifyFinal {
 		o.emit("verification", "Running final verification")
 		var verification Verification
-		if err = o.client.Structured(ctx, MainSystem, active(history, run), VerificationPrompt(userMessage), "final_verification", VerificationSchema(), &verification); err != nil {
+		if err = o.client.Structured(ctx, MainSystem, o.active(history, run), VerificationPrompt(userMessage), "final_verification", VerificationSchema(), &verification); err != nil {
 			return result, err
 		}
 		_ = logger.Append("verification", verification)
@@ -197,7 +197,7 @@ func (o *Orchestrator) selectSkill(ctx context.Context, history, run []openai.Me
 	var err error
 	for attempt := 1; attempt <= 2; attempt++ {
 		choice = SkillChoice{}
-		if err = o.client.Structured(ctx, LibrarianSystem, active(history, run), prompt, "skill_choice", SkillChoiceSchema(), &choice); err != nil {
+		if err = o.client.Structured(ctx, LibrarianSystem, o.active(history, run), prompt, "skill_choice", SkillChoiceSchema(), &choice); err != nil {
 			return nil, run, err
 		}
 		if choice.SkillName == noSkillName {
@@ -228,9 +228,13 @@ func (o *Orchestrator) execute(ctx context.Context, history, run []openai.Messag
 	}
 	nativeTools = append(nativeTools, controlTools()...)
 	successful := map[string]bool{}
-	messages := active(history, run)
+	successfulTools := map[string]bool{}
+	visitedBrowserURLs := map[string]bool{}
+	pendingNavigationURL := ""
+	messages := o.active(history, run)
 	observedWorkspace := hasWorkspaceToolEvidence(messages)
 	messages = append(messages, openai.Message{Role: "user", Content: ExecutionPrompt(task, step, skill)})
+	messages, _ = session.TrimMessages(messages, o.config.MaxContextBytes)
 	for round := 1; round <= o.config.MaxToolRounds; round++ {
 		assistant, err := o.client.Complete(ctx, MainSystem, messages, nativeTools)
 		if err != nil {
@@ -243,6 +247,22 @@ func (o *Orchestrator) execute(ctx context.Context, history, run []openai.Messag
 		run = append(run, assistant)
 		_ = logger.Append("native_assistant_message", map[string]any{"stepId": step.ID, "round": round, "message": assistant})
 		if len(assistant.ToolCalls) == 0 {
+			if pendingNavigationURL != "" {
+				correction := openai.Message{Role: "user", Content: "Browser navigation is incomplete. The opened page exposed a navigation destination matching the user's requested resource. Open it with a read-only browserInteract call before answering: " + pendingNavigationURL}
+				messages = append(messages, correction)
+				run = append(run, correction)
+				_ = logger.Append("execution_retry", map[string]any{"stepId": step.ID, "round": round, "reason": correction.Content})
+				o.emit("retry", correction.Content)
+				continue
+			}
+			if requiresOpenedWebSource(skill.Name, successfulTools) {
+				correction := openai.Message{Role: "user", Content: "Web research is incomplete. Search snippets are discovery hints only. Refine the search if needed, then open relevant source pages with fetchURL or browserInteract before answering. Do not ask the user whether to continue."}
+				messages = append(messages, correction)
+				run = append(run, correction)
+				_ = logger.Append("execution_retry", map[string]any{"stepId": step.ID, "round": round, "reason": correction.Content})
+				o.emit("retry", correction.Content)
+				continue
+			}
 			if !observedWorkspace {
 				correction := openai.Message{Role: "user", Content: "No observed tool evidence exists yet. Use an allowed tool to inspect workspace state before completing the outcome or saying information is missing."}
 				messages = append(messages, correction)
@@ -289,21 +309,69 @@ func (o *Orchestrator) execute(ctx context.Context, history, run []openai.Messag
 				_ = logger.Append("tool_rejected", map[string]any{"stepId": step.ID, "round": round, "request": call, "result": output})
 			} else {
 				successful[key] = true
+				successfulTools[call.Function.Name] = true
 				observedWorkspace = true
+				if call.Function.Name == "browserInteract" {
+					if result, ok := execution.Result.(map[string]any); ok {
+						visitedBrowserURLs[normalizedURL(stringValue(result["url"]))] = true
+						if destination := requestedNavigationDestination(task, result); destination != "" && !visitedBrowserURLs[normalizedURL(destination)] {
+							pendingNavigationURL = destination
+						} else if visitedBrowserURLs[normalizedURL(pendingNavigationURL)] {
+							pendingNavigationURL = ""
+						}
+					}
+				}
 				_ = logger.Append("tool_result", map[string]any{"stepId": step.ID, "round": round, "request": call, "result": execution})
 			}
 			toolMessage := toolResult(call.ID, output)
 			messages = append(messages, toolMessage)
 			run = append(run, toolMessage)
 		}
+		messages, _ = session.TrimMessages(messages, o.config.MaxContextBytes)
 	}
 	return run, policy, "", fmt.Errorf("outcome exceeded %d tool rounds: %s", o.config.MaxToolRounds, step.Goal)
+}
+
+func requestedNavigationDestination(task string, result map[string]any) string {
+	current := normalizedURL(stringValue(result["url"]))
+	task = strings.ToLower(task)
+	var best string
+	var bestLabel string
+	links, _ := result["navigationLinks"].([]any)
+	for _, value := range links {
+		link, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		label := strings.TrimSpace(stringValue(link["text"]))
+		target := strings.TrimSpace(stringValue(link["url"]))
+		if len(label) < 4 || target == "" || normalizedURL(target) == current || !strings.Contains(task, strings.ToLower(label)) {
+			continue
+		}
+		if len(label) > len(bestLabel) {
+			bestLabel, best = label, target
+		}
+	}
+	return best
+}
+
+func normalizedURL(value string) string {
+	return strings.TrimRight(strings.TrimSpace(value), "/")
+}
+
+func stringValue(value any) string {
+	text, _ := value.(string)
+	return text
+}
+
+func requiresOpenedWebSource(skillName string, successfulTools map[string]bool) bool {
+	return skillName == "web-search" && successfulTools["webSearch"] && !successfulTools["fetchURL"] && !successfulTools["browserInteract"]
 }
 
 func (o *Orchestrator) complete(ctx context.Context, task string, history, run []openai.Message, logger *runlog.RunLogger) (CompletionReport, error) {
 	o.emit("finishing", "Preparing completion report")
 	var report CompletionReport
-	err := o.client.Structured(ctx, MainSystem, active(history, run), CompletionPrompt(task), "completion_report", CompletionSchema(), &report)
+	err := o.client.Structured(ctx, MainSystem, o.active(history, run), CompletionPrompt(task), "completion_report", CompletionSchema(), &report)
 	if err == nil {
 		_ = logger.Append("completion_report", report)
 	}
@@ -344,9 +412,11 @@ func hasWorkspaceToolEvidence(messages []openai.Message) bool {
 	return false
 }
 
-func active(history, run []openai.Message) []openai.Message {
+func (o *Orchestrator) active(history, run []openai.Message) []openai.Message {
 	result := append([]openai.Message(nil), history...)
-	return append(result, run...)
+	result = append(result, run...)
+	result, _ = session.TrimMessages(result, o.config.MaxContextBytes)
+	return result
 }
 
 func appendEvent(messages []openai.Message, eventType string, data any) []openai.Message {

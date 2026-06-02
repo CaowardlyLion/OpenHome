@@ -8,15 +8,16 @@ import (
 )
 
 type Config struct {
-	OpenAIBaseURL  string
-	OpenAIModel    string
-	OpenAIAPIKey   string
-	SkillsDir      string
-	WorkspaceDir   string
-	RunsDir        string
-	RuntimeDir     string
-	PermissionMode string
-	MaxToolRounds  int
+	OpenAIBaseURL   string
+	OpenAIModel     string
+	OpenAIAPIKey    string
+	SkillsDir       string
+	WorkspaceDir    string
+	RunsDir         string
+	RuntimeDir      string
+	PermissionMode  string
+	MaxToolRounds   int
+	MaxContextBytes int
 	// Deprecated: retained for launch-script compatibility after per-step verification removal.
 	MaxStepAttempts int
 }
@@ -38,6 +39,10 @@ func LoadFrom(cwd string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	contextBytes, err := positiveInteger("OPENHOME_MAX_CONTEXT_BYTES", 96<<10)
+	if err != nil {
+		return Config{}, err
+	}
 	return Config{
 		OpenAIBaseURL:   env("OPENAI_BASE_URL", "http://10.10.30.80:8000/v1"),
 		OpenAIModel:     env("OPENAI_MODEL", "gemma-4-e2b-it-bf16"),
@@ -48,6 +53,7 @@ func LoadFrom(cwd string) (Config, error) {
 		RuntimeDir:      resolve(cwd, ".openhome"),
 		PermissionMode:  env("OPENHOME_PERMISSION_MODE", "default"),
 		MaxToolRounds:   rounds,
+		MaxContextBytes: contextBytes,
 		MaxStepAttempts: attempts,
 	}, nil
 }

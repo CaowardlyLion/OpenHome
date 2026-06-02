@@ -74,6 +74,9 @@ Advanced tools may pause for user permission. Give their required reason argumen
 Before saying information is missing or asking the user for more detail, inspect the skill instructions and use allowed tools
 when they may provide the answer. Ask for more information only after available skill tools cannot answer the request.
 Do not repeat a tool call when its successful result already appears in the conversation.
+When a tool result recommends request_skill_reselection, call request_skill_reselection with that reason before continuing.
+When browserInteract returns a navigationLinks destination matching the user's requested section, category, account, or resource,
+open that destination with another read-only browserInteract call before completing. Do not substitute related content from a broader page.
 When the outcome is complete, reply with a brief completion sentence and no tool call.
 Call request_skill_reselection only if this skill cannot handle the outcome.
 Call request_verification if observed evidence makes final verification prudent.`, task, jsonText(step), skill.Name, skill.AllowedTools, skill.Content)
@@ -90,6 +93,8 @@ Write the response you would send if replying to the user for the first time aft
 Do not write a completion report or summarize that an answer was generated. Give the answer itself.
 Include useful observed details. Do not mention internal lanes, skills, tools, planning, verification, or implementation machinery.
 Do not invent facts.
+Every factual URL, headline, quote, and current claim must be grounded in prior observed tool output. Never invent plausible URLs,
+headlines, dates, or source details. If evidence is incomplete, state the limitation instead of filling gaps.
 The user has not seen prior executor replies, tool calls, tool outputs, or trace messages. They only see this final report.
 Do not say content was provided, suggested, listed, or explained unless this final report includes that content directly.
 For requested recipes, plans, checklists, lists, instructions, or answers, include the actual useful content, not a summary saying

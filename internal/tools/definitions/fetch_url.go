@@ -4,7 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html"
 	"net/http"
+	"net/url"
+	"regexp"
+	"strings"
 
 	"github.com/CaowardlyLion/OpenHome/internal/permissions"
 	"github.com/CaowardlyLion/OpenHome/internal/tools"
@@ -12,9 +16,13 @@ import (
 
 var errRedirectDenied = errors.New("user denied redirect")
 
+const fetchURLLinkLimit = 60
+
+var htmlAnchorPattern = regexp.MustCompile(`(?is)<a\b[^>]*\bhref\s*=\s*["']([^"']+)["'][^>]*>(.*?)</a\s*>`)
+
 func FetchURL() tools.Definition {
 	return tools.Definition{
-		Name: "fetchURL", Advanced: true, Description: "Fetch text from an HTTP(S) URL after user permission.",
+		Name: "fetchURL", Advanced: true, Description: "Fetch compact readable text and bounded page links from an HTTP(S) URL. Default permission mode allows static fetches automatically. Use specific returned article links when citing sources. If the site rejects static fetching or returns a browser challenge, follow the result guidance and request skill reselection for browser-navigation.",
 		Parameters: urlReasonSchema(false),
 		Execute: func(ctx context.Context, toolContext tools.Context, args map[string]any) (any, error) {
 			rawURL, err := stringArg(args, "url")
@@ -34,13 +42,89 @@ func FetchURL() tools.Definition {
 			if err != nil {
 				return nil, err
 			}
-			text, contextTruncated := compactResponseText(content, response.Header.Get("Content-Type"))
-			return map[string]any{
-				"status": response.StatusCode, "url": response.Request.URL.String(), "headers": selectedHeaders(response.Header),
-				"text": text, "truncated": responseTruncated || contextTruncated,
-			}, nil
+			return fetchedResponseResult(response, content, responseTruncated), nil
 		},
 	}
+}
+
+func fetchedResponseResult(response *http.Response, content []byte, responseTruncated bool) map[string]any {
+	text, contextTruncated := compactResponseText(content, response.Header.Get("Content-Type"))
+	result := map[string]any{
+		"status": response.StatusCode, "url": response.Request.URL.String(), "headers": selectedHeaders(response.Header),
+	}
+	if reason := browserNavigationFallbackReason(response.StatusCode, text); reason != "" {
+		result["blocked"] = true
+		result["reason"] = reason
+		result["recommendedAction"] = "Call request_skill_reselection so the librarian can select browser-navigation, then use browserInteract."
+		result["recommendedSkill"] = "browser-navigation"
+		return result
+	}
+	result["text"] = text
+	if links := extractResponseLinks(content, response.Request.URL); len(links) > 0 {
+		result["links"] = links
+	}
+	result["truncated"] = responseTruncated || contextTruncated
+	return result
+}
+
+func extractResponseLinks(content []byte, baseURL *url.URL) []map[string]string {
+	if baseURL == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	result := make([]map[string]string, 0, fetchURLLinkLimit)
+	for _, match := range htmlAnchorPattern.FindAllSubmatch(content, -1) {
+		href := strings.TrimSpace(html.UnescapeString(string(match[1])))
+		target, err := url.Parse(href)
+		if err != nil {
+			continue
+		}
+		target = baseURL.ResolveReference(target)
+		if (target.Scheme != "http" && target.Scheme != "https") || target.Host == "" {
+			continue
+		}
+		target.Fragment = ""
+		resolved := target.String()
+		if seen[resolved] {
+			continue
+		}
+		text := htmlTagPattern.ReplaceAllString(string(match[2]), " ")
+		text = strings.TrimSpace(spacePattern.ReplaceAllString(html.UnescapeString(text), " "))
+		if text == "" {
+			continue
+		}
+		if len(text) > 240 {
+			text = text[:240]
+		}
+		seen[resolved] = true
+		result = append(result, map[string]string{"text": text, "url": resolved})
+		if len(result) == fetchURLLinkLimit {
+			break
+		}
+	}
+	return result
+}
+
+func browserNavigationFallbackReason(status int, text string) string {
+	switch status {
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusProxyAuthRequired, http.StatusTooManyRequests:
+		return fmt.Sprintf("Static fetch returned HTTP %d. The site may require a rendered browser session, authentication, or interactive access.", status)
+	}
+	lower := strings.ToLower(text)
+	for _, marker := range []string{
+		"verify you are human",
+		"checking your browser",
+		"enable javascript and cookies",
+		"captcha",
+		"access denied",
+		"please complete the following challenge",
+		"unfortunately, bots use",
+	} {
+		if strings.Contains(lower, marker) {
+			return "Static fetch returned a browser challenge or access-block page."
+		}
+	}
+	return ""
 }
 
 func urlReasonSchema(path bool) map[string]any {

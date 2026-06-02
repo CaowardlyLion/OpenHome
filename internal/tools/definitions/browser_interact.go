@@ -43,7 +43,7 @@ func NewCloakBrowserRunner() CloakBrowserRunner {
 func BrowserInteract(runner BrowserRunner) tools.Definition {
 	return tools.Definition{
 		Name: "browserInteract", Advanced: true,
-		Description: "Open a website in CloakBrowser, optionally click or type using CSS selectors, capture a workspace screenshot, and return compact visible page text and links. Browser interaction always requires permission.",
+		Description: "Open a rendered website in CloakBrowser, optionally click or type using CSS selectors, capture a workspace screenshot, and return compact visible page text plus prioritized content and navigation links. Default permission mode allows read-only page opens automatically; actions still require permission.",
 		Parameters: map[string]any{
 			"type": "object", "additionalProperties": false, "required": []string{"url", "reason"},
 			"properties": map[string]any{
@@ -85,6 +85,8 @@ func BrowserInteract(runner BrowserRunner) tools.Definition {
 			if err := validateBrowserActions(args["actions"]); err != nil {
 				return nil, err
 			}
+			actions, _ := args["actions"].([]any)
+			hasActions := len(actions) > 0
 			screenshotPath, err := optionalStringArg(args, "screenshotPath", "")
 			if err != nil {
 				return nil, err
@@ -118,7 +120,7 @@ func BrowserInteract(runner BrowserRunner) tools.Definition {
 			}
 			if toolContext.Permissions == nil || toolContext.Permissions.Authorize(ctx, permissions.Request{
 				Tool: "browserInteract", Reason: reason, Target: parsed.String(), SimilarKey: parsed.Host,
-				Details: browserDetails(screenshotPath), Elevated: true,
+				Details: browserDetails(screenshotPath, hasActions), Elevated: hasActions,
 			}) == permissions.Deny {
 				return denied("browserInteract"), nil
 			}
@@ -131,8 +133,11 @@ func BrowserInteract(runner BrowserRunner) tools.Definition {
 	}
 }
 
-func browserDetails(screenshotPath string) string {
-	details := "CloakBrowser may open pages, click elements, or type text."
+func browserDetails(screenshotPath string, hasActions bool) string {
+	details := "CloakBrowser opens a rendered page for read-only inspection."
+	if hasActions {
+		details = "CloakBrowser may click elements, type text, or navigate additional pages."
+	}
 	if screenshotPath != "" {
 		details += " Screenshot output: " + screenshotPath
 	}

@@ -22,7 +22,7 @@ func TestAuthorizeRemembersSimilarInDefaultMode(t *testing.T) {
 		calls++
 		return AllowSimilar
 	})
-	request := Request{Tool: "fetchURL", SimilarKey: "https://example.com/a"}
+	request := Request{Tool: "downloadFile", SimilarKey: "https://example.com/a"}
 	if manager.Authorize(context.Background(), request) != AllowSimilar || manager.Authorize(context.Background(), request) != AllowOnce || calls != 1 {
 		t.Fatalf("calls = %d", calls)
 	}
@@ -34,7 +34,7 @@ func TestAskModeStillPromptsForRememberedRule(t *testing.T) {
 		calls++
 		return AllowSimilar
 	})
-	request := Request{Tool: "fetchURL", SimilarKey: "x"}
+	request := Request{Tool: "downloadFile", SimilarKey: "x"}
 	manager.Authorize(context.Background(), request)
 	if err := manager.SetMode(Ask); err != nil {
 		t.Fatal(err)
@@ -101,11 +101,64 @@ func TestCustomShellAllowRuleSuppressesPrompt(t *testing.T) {
 	}
 }
 
+func TestDefaultAllowedToolSuppressesPrompt(t *testing.T) {
+	calls := 0
+	manager := manager(t, Default, func(context.Context, Request) Decision {
+		calls++
+		return Deny
+	})
+	if manager.Authorize(context.Background(), Request{Tool: "webSearch", SimilarKey: "latest news"}) != AllowOnce || calls != 0 {
+		t.Fatalf("calls = %d", calls)
+	}
+	if manager.Authorize(context.Background(), Request{Tool: "fetchURL", SimilarKey: "https://example.com"}) != AllowOnce || calls != 0 {
+		t.Fatalf("calls = %d", calls)
+	}
+}
+
+func TestDefaultAllowedToolsFileIsEditable(t *testing.T) {
+	runtimeDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(runtimeDir, "default-allow-tools.txt"), []byte("webSearch\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	manager, err := New(runtimeDir, t.TempDir(), Default, func(context.Context, Request) Decision {
+		calls++
+		return Deny
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manager.Authorize(context.Background(), Request{Tool: "webSearch"}) != AllowOnce {
+		t.Fatal("webSearch was not allowed")
+	}
+	if manager.Authorize(context.Background(), Request{Tool: "fetchURL"}) != Deny || calls != 1 {
+		t.Fatalf("calls = %d", calls)
+	}
+}
+
+func TestDefaultAllowedCommandsFileIsEditable(t *testing.T) {
+	runtimeDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(runtimeDir, "default-allow-commands.txt"), []byte("# no default commands\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	manager, err := New(runtimeDir, t.TempDir(), Default, func(context.Context, Request) Decision {
+		calls++
+		return Deny
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manager.AuthorizeCommand(context.Background(), "ls", []string{"."}, "inspect", 30) != Deny || calls != 1 {
+		t.Fatalf("calls = %d", calls)
+	}
+}
+
 func TestAuthorizeEmitsAuditEvents(t *testing.T) {
 	manager := manager(t, Default, func(context.Context, Request) Decision { return Deny })
 	var events []string
 	manager.SetAudit(func(event string, _ any) { events = append(events, event) })
-	manager.Authorize(context.Background(), Request{Tool: "fetchURL", SimilarKey: "x"})
+	manager.Authorize(context.Background(), Request{Tool: "downloadFile", SimilarKey: "x"})
 	if len(events) != 2 || events[0] != "permission_requested" || events[1] != "permission_decision" {
 		t.Fatalf("events = %#v", events)
 	}

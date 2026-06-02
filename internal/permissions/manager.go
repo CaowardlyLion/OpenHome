@@ -38,14 +38,16 @@ type Request struct {
 type PromptFunc func(context.Context, Request) Decision
 
 type Manager struct {
-	mu        sync.RWMutex
-	mode      Mode
-	prompt    PromptFunc
-	rules     map[string]bool
-	allow     []*regexp.Regexp
-	deny      []*regexp.Regexp
-	workspace string
-	audit     func(string, any)
+	mu                   sync.RWMutex
+	mode                 Mode
+	prompt               PromptFunc
+	rules                map[string]bool
+	defaultAllowTools    map[string]bool
+	defaultAllowCommands []*regexp.Regexp
+	allow                []*regexp.Regexp
+	deny                 []*regexp.Regexp
+	workspace            string
+	audit                func(string, any)
 }
 
 func (m *Manager) SetAudit(audit func(string, any)) {
@@ -65,11 +67,19 @@ func New(runtimeDir, workspace string, mode Mode, prompt PromptFunc) (*Manager, 
 	if err != nil {
 		return nil, err
 	}
+	defaultAllowCommands, err := loadRegexFile(filepath.Join(runtimeDir, "default-allow-commands.txt"))
+	if err != nil {
+		return nil, err
+	}
 	deny, err := loadRegexFile(filepath.Join(runtimeDir, "shell-deny.txt"))
 	if err != nil {
 		return nil, err
 	}
-	return &Manager{mode: mode, prompt: prompt, rules: map[string]bool{}, allow: allow, deny: deny, workspace: workspace}, nil
+	defaultAllowTools, err := loadNameFile(filepath.Join(runtimeDir, "default-allow-tools.txt"))
+	if err != nil {
+		return nil, err
+	}
+	return &Manager{mode: mode, prompt: prompt, rules: map[string]bool{}, defaultAllowTools: defaultAllowTools, defaultAllowCommands: defaultAllowCommands, allow: allow, deny: deny, workspace: workspace}, nil
 }
 
 func (m *Manager) Mode() Mode {
@@ -92,13 +102,18 @@ func (m *Manager) Authorize(ctx context.Context, request Request) Decision {
 	m.mu.RLock()
 	mode := m.mode
 	remembered := m.rules[request.Tool+"\x00"+request.SimilarKey]
+	defaultAllowed := m.defaultAllowTools[request.Tool]
 	prompt := m.prompt
 	audit := m.audit
 	m.mu.RUnlock()
 	if !request.Elevated {
-		if mode == Allow || (mode == Default && remembered) {
+		if mode == Allow || (mode == Default && (remembered || defaultAllowed)) {
 			if audit != nil {
-				audit("permission_allowed", map[string]any{"request": request, "source": "mode_or_rule"})
+				source := "mode_or_rule"
+				if mode == Default && defaultAllowed {
+					source = "default_tool_rule"
+				}
+				audit("permission_allowed", map[string]any{"request": request, "source": source})
 			}
 			return AllowOnce
 		}
@@ -141,7 +156,7 @@ func (m *Manager) AuthorizeCommand(ctx context.Context, command string, args []s
 		m.auditEvent("permission_allowed", map[string]any{"tool": "runCommand", "target": normalized, "source": "allow_mode"})
 		return AllowOnce
 	}
-	if matches(m.allow, normalized) || m.safeInspection(command, args) {
+	if matches(m.allow, normalized) || (matches(m.defaultAllowCommands, normalized) && m.safeInspection(command, args)) {
 		m.auditEvent("permission_allowed", map[string]any{"tool": "runCommand", "target": normalized, "source": "shell_rule"})
 		return AllowOnce
 	}
@@ -218,7 +233,46 @@ func ensureRuleFiles(runtimeDir string) error {
 			return err
 		}
 	}
+	defaultAllowTools := filepath.Join(runtimeDir, "default-allow-tools.txt")
+	if _, err := os.Stat(defaultAllowTools); os.IsNotExist(err) {
+		content := `# Advanced tools allowed without prompting in default mode.
+# Add or remove one exact tool name per line. Ask mode still prompts.
+webSearch
+fetchURL
+browserInteract
+`
+		if err := os.WriteFile(defaultAllowTools, []byte(content), 0o644); err != nil {
+			return err
+		}
+	}
+	defaultAllowCommands := filepath.Join(runtimeDir, "default-allow-commands.txt")
+	if _, err := os.Stat(defaultAllowCommands); os.IsNotExist(err) {
+		content := `# Shell commands allowed without prompting in default mode.
+# Edit these regexes to change default-mode shell behavior.
+^pwd$
+^(ls|cat|head|tail|wc|rg|find)( |$)
+`
+		if err := os.WriteFile(defaultAllowCommands, []byte(content), 0o644); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func loadNameFile(name string) (map[string]bool, error) {
+	content, err := os.ReadFile(name)
+	if err != nil {
+		return nil, err
+	}
+	result := map[string]bool{}
+	for _, line := range strings.Split(string(content), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		result[line] = true
+	}
+	return result, nil
 }
 
 func loadRegexFile(name string) ([]*regexp.Regexp, error) {

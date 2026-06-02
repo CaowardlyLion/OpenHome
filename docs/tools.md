@@ -17,14 +17,17 @@ traversal, parent symlink escapes, and writes through symlinked output files.
 
 - `readExternalFile`: read approved absolute local path, capped at 2 MB.
 - `runCommand`: run one binary directly from workspace cwd. No shell pipes or redirection.
-- `fetchURL`: fetch approved HTTP(S), extract readable text, and return at most 32 KB of context. Raw HTML, scripts, styles, and large page bodies are not inserted into model context.
+- `fetchURL`: fetch approved HTTP(S), extract readable text, and return at most 32 KB of text plus 60 resolved page links. Raw HTML, scripts, styles, and large page bodies are not inserted into model context. Static-fetch blocks, authorization failures, and browser challenges return guidance to reselect `browser-navigation`.
 - `downloadFile`: save approved HTTP(S) response inside workspace, capped at 50 MB.
 - `webSearch`: search through provider-neutral adapter. Default is Bing RSS.
-- `browserInteract`: open rendered pages through CloakBrowser, optionally click or type with CSS selectors, capture workspace PNG screenshots, and return compact visible text and links. Always prompts.
+- `browserInteract`: open rendered pages through CloakBrowser, optionally click or type with CSS selectors, capture workspace PNG screenshots, and return compact visible text plus prioritized content and navigation links. Read-only opens run automatically in default mode; actions prompt.
 - `sendEmail`: send explicitly requested email through configured SMTP. Always prompts.
 
-Advanced tools require agent-supplied reason. Prompt choices: allow once,
-always allow similar for current process, or deny.
+Advanced tools require an agent-supplied reason. In `default` mode, `webSearch`
+`fetchURL`, and read-only `browserInteract` opens run automatically. Edit
+`.openhome/default-allow-tools.txt` to change which advanced tools skip prompts.
+Prompt choices for other tools are:
+allow once, always allow similar for current process, or deny.
 
 ## CloakBrowser
 
@@ -38,8 +41,9 @@ always allow similar for current process, or deny.
 
 CloakBrowser requires its Chromium binary. The OpenHome bridge
 uses a persistent profile under `.openhome/cloakbrowser-profile` and returns at
-most 24 KB of visible page text plus 30 links. Screenshots are written only to
-workspace-relative `.png` paths after Go workspace sandbox validation.
+most 24 KB of visible page text, 60 prioritized content links, and 30 navigation
+links. Screenshots are written only to workspace-relative `.png` paths after Go
+workspace sandbox validation.
 Obstructing overlays may be hidden for capture with `screenshotHideSelectors`
 without clicking acceptance or changing site state.
 
@@ -54,7 +58,9 @@ that do not require authentication. Email sending always pauses for approval.
 `runCommand` defaults to 30-second timeout and caps stdout and stderr at 1 MB
 each. Agent may request up to 600 seconds; values above 30 seconds always prompt.
 
-Default mode automatically permits workspace-safe inspection commands such as
-`ls`, `pwd`, `find`, `cat`, `head`, `tail`, `wc`, and `rg`. Host paths, risky
-flags, and write-like commands prompt. User regex allow and deny files live
-under `.openhome/`; deny rules always win.
+Default mode automatically permits tools listed in
+`.openhome/default-allow-tools.txt` and workspace-safe inspection commands
+listed in `.openhome/default-allow-commands.txt`. The generated shell defaults
+include `ls`, `pwd`, `find`, `cat`, `head`, `tail`, `wc`, and `rg`. Host paths,
+risky flags, and write-like shell commands prompt. Additional shell regex allow
+and deny files live under `.openhome/`; deny rules always win.

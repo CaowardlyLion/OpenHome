@@ -93,6 +93,58 @@ func TestCompactResponseTextRemovesHTMLNoiseAndCapsContext(t *testing.T) {
 	}
 }
 
+func TestBrowserNavigationFallbackReasonForBlockedFetch(t *testing.T) {
+	for _, test := range []struct {
+		status int
+		text   string
+	}{
+		{status: http.StatusUnauthorized},
+		{status: http.StatusForbidden},
+		{status: http.StatusTooManyRequests},
+		{status: http.StatusOK, text: "Please verify you are human"},
+		{status: http.StatusOK, text: "Unfortunately, bots use this site too."},
+	} {
+		if reason := browserNavigationFallbackReason(test.status, test.text); reason == "" {
+			t.Fatalf("missing fallback for status = %d, text = %q", test.status, test.text)
+		}
+	}
+	if reason := browserNavigationFallbackReason(http.StatusNotFound, "missing"); reason != "" {
+		t.Fatalf("unexpected fallback = %q", reason)
+	}
+}
+
+func TestFetchedResponseResultRecommendsBrowserNavigation(t *testing.T) {
+	request, err := http.NewRequest(http.MethodGet, "https://example.com/private", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := fetchedResponseResult(&http.Response{
+		StatusCode: http.StatusForbidden,
+		Header:     http.Header{"Content-Type": []string{"text/html"}},
+		Request:    request,
+	}, []byte(`<html><body>Access denied</body></html>`), false)
+	if result["blocked"] != true || result["recommendedSkill"] != "browser-navigation" ||
+		!strings.Contains(result["recommendedAction"].(string), "request_skill_reselection") {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestFetchedResponseResultIncludesBoundedResolvedLinks(t *testing.T) {
+	request, err := http.NewRequest(http.MethodGet, "https://example.com/news/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := fetchedResponseResult(&http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/html"}},
+		Request:    request,
+	}, []byte(`<a href="/article?id=1#details"><strong>Useful</strong> headline</a><a href="mailto:editor@example.com">Email</a><a href="/article?id=1">Duplicate</a>`), false)
+	links := result["links"].([]map[string]string)
+	if len(links) != 1 || links[0]["text"] != "Useful headline" || links[0]["url"] != "https://example.com/article?id=1" {
+		t.Fatalf("links = %#v", links)
+	}
+}
+
 func TestDuckDuckGoChallengeReturnsError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		response.WriteHeader(http.StatusAccepted)
@@ -107,7 +159,11 @@ func TestDuckDuckGoChallengeReturnsError(t *testing.T) {
 
 func TestAdvancedToolReturnsStructuredDenial(t *testing.T) {
 	root := t.TempDir()
-	manager, err := permissions.New(t.TempDir(), root, permissions.Default, nil)
+	runtimeDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(runtimeDir, "default-allow-tools.txt"), []byte("# no default tools\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := permissions.New(runtimeDir, root, permissions.Default, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +207,7 @@ func TestFetchRedirectDenialIsStructured(t *testing.T) {
 	}
 }
 
-func TestBrowserInteractAlwaysPromptsAndReturnsCompactResult(t *testing.T) {
+func TestBrowserInteractReadOnlyOpenUsesDefaultPolicy(t *testing.T) {
 	root := t.TempDir()
 	prompts := 0
 	manager, err := permissions.New(t.TempDir(), root, permissions.Allow, func(context.Context, permissions.Request) permissions.Decision {
@@ -167,8 +223,29 @@ func TestBrowserInteractAlwaysPromptsAndReturnsCompactResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err := registry.Execute(context.Background(), "browserInteract", `{"url":"https://example.com","reason":"inspect rendered page"}`)
-	if err != nil || prompts != 1 || runner.calls != 1 || result.Result.(map[string]any)["text"] != "Compact page text." {
+	if err != nil || prompts != 0 || runner.calls != 1 || result.Result.(map[string]any)["text"] != "Compact page text." {
 		t.Fatalf("result = %#v, prompts = %d, calls = %d, err = %v", result, prompts, runner.calls, err)
+	}
+}
+
+func TestBrowserInteractActionsAlwaysPrompt(t *testing.T) {
+	root := t.TempDir()
+	prompts := 0
+	manager, err := permissions.New(t.TempDir(), root, permissions.Allow, func(context.Context, permissions.Request) permissions.Decision {
+		prompts++
+		return permissions.AllowOnce
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeBrowserRunner{}
+	registry, err := tools.NewRegistry(root, manager, []tools.Definition{BrowserInteract(runner)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = registry.Execute(context.Background(), "browserInteract", `{"url":"https://example.com","reason":"inspect rendered page","actions":[{"action":"wait","ms":100}]}`)
+	if err != nil || prompts != 1 || runner.calls != 1 {
+		t.Fatalf("prompts = %d, calls = %d, err = %v", prompts, runner.calls, err)
 	}
 }
 
