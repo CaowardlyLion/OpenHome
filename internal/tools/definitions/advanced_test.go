@@ -13,6 +13,17 @@ import (
 	"github.com/CaowardlyLion/OpenHome/internal/tools"
 )
 
+type fakeBrowserRunner struct {
+	calls int
+	args  map[string]any
+}
+
+func (runner *fakeBrowserRunner) Run(_ context.Context, args map[string]any) (map[string]any, error) {
+	runner.calls++
+	runner.args = args
+	return map[string]any{"title": "Example", "text": "Compact page text."}, nil
+}
+
 func advancedRegistry(t *testing.T, serverURL string) (*tools.Registry, string) {
 	t.Helper()
 	root := t.TempDir()
@@ -55,7 +66,7 @@ func TestFetchDownloadAndSearch(t *testing.T) {
 	defer server.Close()
 	registry, root := advancedRegistry(t, server.URL+"/html/")
 	fetch, err := registry.Execute(context.Background(), "fetchURL", `{"url":"`+server.URL+`/page","reason":"inspect"}`)
-	if err != nil || !strings.Contains(fetch.Result.(map[string]any)["body"].(string), "download body") {
+	if err != nil || !strings.Contains(fetch.Result.(map[string]any)["text"].(string), "download body") {
 		t.Fatalf("fetch = %#v, %v", fetch, err)
 	}
 	download, err := registry.Execute(context.Background(), "downloadFile", `{"url":"`+server.URL+`/file","path":"downloads/file.txt","reason":"save"}`)
@@ -68,6 +79,17 @@ func TestFetchDownloadAndSearch(t *testing.T) {
 	search, err := registry.Execute(context.Background(), "webSearch", `{"query":"test","reason":"research"}`)
 	if err != nil || len(search.Result.([]map[string]string)) != 1 {
 		t.Fatalf("search = %#v, %v", search, err)
+	}
+}
+
+func TestCompactResponseTextRemovesHTMLNoiseAndCapsContext(t *testing.T) {
+	text, truncated := compactResponseText([]byte(`<html><style>hide</style><script>ignore()</script><h1>Hello &amp; welcome</h1><p>Useful text.</p></html>`), "text/html")
+	if truncated || strings.Contains(text, "ignore") || text != "Hello & welcome\n\nUseful text." {
+		t.Fatalf("text = %q, truncated = %v", text, truncated)
+	}
+	text, truncated = compactResponseText([]byte(strings.Repeat("x", contextTextLimit+1)), "text/plain")
+	if !truncated || len(text) != contextTextLimit {
+		t.Fatalf("text length = %d, truncated = %v", len(text), truncated)
 	}
 }
 
@@ -126,5 +148,166 @@ func TestFetchRedirectDenialIsStructured(t *testing.T) {
 	result, err := registry.Execute(context.Background(), "fetchURL", `{"url":"`+server.URL+`/redirect","reason":"inspect"}`)
 	if err != nil || result.Result.(map[string]any)["denied"] != true {
 		t.Fatalf("result = %#v, %v", result, err)
+	}
+}
+
+func TestBrowserInteractAlwaysPromptsAndReturnsCompactResult(t *testing.T) {
+	root := t.TempDir()
+	prompts := 0
+	manager, err := permissions.New(t.TempDir(), root, permissions.Allow, func(context.Context, permissions.Request) permissions.Decision {
+		prompts++
+		return permissions.AllowOnce
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeBrowserRunner{}
+	registry, err := tools.NewRegistry(root, manager, []tools.Definition{BrowserInteract(runner)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := registry.Execute(context.Background(), "browserInteract", `{"url":"https://example.com","reason":"inspect rendered page"}`)
+	if err != nil || prompts != 1 || runner.calls != 1 || result.Result.(map[string]any)["text"] != "Compact page text." {
+		t.Fatalf("result = %#v, prompts = %d, calls = %d, err = %v", result, prompts, runner.calls, err)
+	}
+}
+
+func TestNewCloakBrowserRunnerPrefersProjectVenv(t *testing.T) {
+	t.Setenv("OPENHOME_CLOAKBROWSER_PYTHON", "")
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".venv", "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".venv", "bin", "python"), []byte{}, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	original, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(original)
+	if runner := NewCloakBrowserRunner(); runner.Python != filepath.Join(".venv", "bin", "python") {
+		t.Fatalf("python = %q", runner.Python)
+	}
+}
+
+func TestBrowserInteractRejectsNonHTTPGoto(t *testing.T) {
+	root := t.TempDir()
+	manager, err := permissions.New(t.TempDir(), root, permissions.Allow, func(context.Context, permissions.Request) permissions.Decision {
+		return permissions.AllowOnce
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeBrowserRunner{}
+	registry, err := tools.NewRegistry(root, manager, []tools.Definition{BrowserInteract(runner)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = registry.Execute(context.Background(), "browserInteract", `{"url":"https://example.com","reason":"inspect","actions":[{"action":"goto","url":"file:///etc/passwd"}]}`)
+	if err == nil || runner.calls != 0 {
+		t.Fatalf("error = %v, calls = %d", err, runner.calls)
+	}
+}
+
+func TestBrowserInteractResolvesWorkspaceScreenshotPath(t *testing.T) {
+	root := t.TempDir()
+	manager, err := permissions.New(t.TempDir(), root, permissions.Allow, func(context.Context, permissions.Request) permissions.Decision {
+		return permissions.AllowOnce
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeBrowserRunner{}
+	registry, err := tools.NewRegistry(root, manager, []tools.Definition{BrowserInteract(runner)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := registry.Execute(context.Background(), "browserInteract", `{"url":"https://example.com","reason":"capture","screenshotPath":"screenshots/article.png","screenshotOutputPath":"/tmp/smuggled.png"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runner.args["screenshotOutputPath"] != filepath.Join(root, "screenshots", "article.png") {
+		t.Fatalf("runner args = %#v", runner.args)
+	}
+	if result.Result.(map[string]any)["screenshotPath"] != "screenshots/article.png" {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestBrowserInteractRejectsScreenshotTraversal(t *testing.T) {
+	root := t.TempDir()
+	manager, err := permissions.New(t.TempDir(), root, permissions.Allow, func(context.Context, permissions.Request) permissions.Decision {
+		return permissions.AllowOnce
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeBrowserRunner{}
+	registry, err := tools.NewRegistry(root, manager, []tools.Definition{BrowserInteract(runner)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = registry.Execute(context.Background(), "browserInteract", `{"url":"https://example.com","reason":"capture","screenshotPath":"../outside.png"}`)
+	if err == nil || runner.calls != 0 {
+		t.Fatalf("error = %v, calls = %d", err, runner.calls)
+	}
+}
+
+func TestBrowserInteractRejectsScreenshotHideSelectorsWithoutPath(t *testing.T) {
+	root := t.TempDir()
+	manager, err := permissions.New(t.TempDir(), root, permissions.Allow, func(context.Context, permissions.Request) permissions.Decision {
+		return permissions.AllowOnce
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeBrowserRunner{}
+	registry, err := tools.NewRegistry(root, manager, []tools.Definition{BrowserInteract(runner)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = registry.Execute(context.Background(), "browserInteract", `{"url":"https://example.com","reason":"capture","screenshotHideSelectors":["[role=dialog]"]}`)
+	if err == nil || runner.calls != 0 {
+		t.Fatalf("error = %v, calls = %d", err, runner.calls)
+	}
+}
+
+func TestSendEmailRequiresConfigurationBeforeSending(t *testing.T) {
+	t.Setenv("OPENHOME_SMTP_FROM", "")
+	t.Setenv("OPENHOME_SMTP_ADDR", "")
+	root := t.TempDir()
+	manager, err := permissions.New(t.TempDir(), root, permissions.Allow, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := tools.NewRegistry(root, manager, []tools.Definition{SendEmail()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = registry.Execute(context.Background(), "sendEmail", `{"to":["person@example.com"],"subject":"Hello","body":"Hi","reason":"send requested email"}`)
+	if err == nil || !strings.Contains(err.Error(), "OPENHOME_SMTP_FROM") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestSendEmailRejectsHeaderInjection(t *testing.T) {
+	t.Setenv("OPENHOME_SMTP_FROM", "sender@example.com")
+	t.Setenv("OPENHOME_SMTP_ADDR", "smtp.example.com:587")
+	root := t.TempDir()
+	manager, err := permissions.New(t.TempDir(), root, permissions.Allow, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := tools.NewRegistry(root, manager, []tools.Definition{SendEmail()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = registry.Execute(context.Background(), "sendEmail", `{"to":["person@example.com"],"subject":"Hello\r\nBcc: hidden@example.com","body":"Hi","reason":"send requested email"}`)
+	if err == nil || !strings.Contains(err.Error(), "line breaks") {
+		t.Fatalf("error = %v", err)
 	}
 }

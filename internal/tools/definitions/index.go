@@ -10,5 +10,6 @@ func All() []tools.Definition {
 	return []tools.Definition{
 		ListFiles(), ReadFile(), SearchFiles(), WriteFile(),
 		ReadExternalFile(), RunCommand(), FetchURL(), DownloadFile(), WebSearch(BingRSS{Endpoint: os.Getenv("OPENHOME_SEARCH_ENDPOINT")}),
+		BrowserInteract(NewCloakBrowserRunner()), SendEmail(),
 	}
 }

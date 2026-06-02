@@ -4,3 +4,5 @@ dist/
 .cache/
 bin/
 .legacy-typescript/
+workspace/
+.venv/

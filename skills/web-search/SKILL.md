@@ -4,6 +4,7 @@ description: Research fresh internet information by searching the web and openin
 allowedTools:
   - webSearch
   - fetchURL
+  - browserInteract
 ---
 
 # Web Search
@@ -19,6 +20,11 @@ cross-check another relevant source when practical.
 If a search result page cannot be fetched, try another relevant result. If
 permission is denied or no usable source can be opened, explain that limitation
 instead of presenting search snippets as verified facts.
+
+If a relevant page requires rendered JavaScript or browser interaction, use
+`browserInteract`. Do not click buttons that submit forms, place orders, send
+messages, or otherwise create side effects unless the user explicitly requested
+that action and approves the browser interaction.
 
 ## Completion
 

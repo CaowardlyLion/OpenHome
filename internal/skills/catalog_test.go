@@ -37,7 +37,7 @@ func TestLoadCatalogRejectsUnknownTool(t *testing.T) {
 
 func TestRepositoryWebSearchSkillLoads(t *testing.T) {
 	catalog, err := skills.Load(filepath.Join("..", "..", "skills"), []string{
-		"listFiles", "readFile", "searchFiles", "writeFile", "webSearch", "fetchURL",
+		"listFiles", "readFile", "searchFiles", "writeFile", "webSearch", "fetchURL", "browserInteract", "sendEmail",
 	})
 	if err != nil {
 		t.Fatal(err)

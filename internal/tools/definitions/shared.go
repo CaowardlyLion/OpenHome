@@ -2,9 +2,23 @@ package definitions
 
 import (
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
+	"strings"
+)
+
+const contextTextLimit = 32 << 10
+
+var (
+	htmlCommentPattern = regexp.MustCompile(`(?s)<!--.*?-->`)
+	htmlNoisePattern   = regexp.MustCompile(`(?is)<(?:script|style|svg|noscript|template)[^>]*>.*?</(?:script|style|svg|noscript|template)\s*>`)
+	htmlBreakPattern   = regexp.MustCompile(`(?i)</?(address|article|aside|blockquote|br|div|footer|h[1-6]|header|hr|li|main|nav|ol|p|pre|section|table|tr|ul)[^>]*>`)
+	htmlTagPattern     = regexp.MustCompile(`(?s)<[^>]+>`)
+	spacePattern       = regexp.MustCompile(`[ \t\f\v]+`)
+	blankLinePattern   = regexp.MustCompile(`\n{3,}`)
 )
 
 func stringArg(args map[string]any, name string) (string, error) {
@@ -63,6 +77,18 @@ func intArg(args map[string]any, name string, fallback int) (int, error) {
 	return int(number), nil
 }
 
+func boolArg(args map[string]any, name string, fallback bool) (bool, error) {
+	value, ok := args[name]
+	if !ok {
+		return fallback, nil
+	}
+	result, ok := value.(bool)
+	if !ok {
+		return false, fmt.Errorf("argument %q must be a boolean", name)
+	}
+	return result, nil
+}
+
 func parseHTTPURL(raw string) (*url.URL, error) {
 	parsed, err := url.Parse(raw)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
@@ -90,6 +116,28 @@ func selectedHeaders(headers http.Header) map[string]string {
 		}
 	}
 	return result
+}
+
+func compactResponseText(content []byte, contentType string) (string, bool) {
+	text := string(content)
+	if strings.Contains(strings.ToLower(contentType), "html") || strings.Contains(strings.ToLower(text), "<html") {
+		text = htmlCommentPattern.ReplaceAllString(text, "")
+		text = htmlNoisePattern.ReplaceAllString(text, "")
+		text = htmlBreakPattern.ReplaceAllString(text, "\n")
+		text = htmlTagPattern.ReplaceAllString(text, "")
+		text = html.UnescapeString(text)
+	}
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	lines := strings.Split(text, "\n")
+	for index, line := range lines {
+		lines[index] = strings.TrimSpace(spacePattern.ReplaceAllString(line, " "))
+	}
+	text = strings.TrimSpace(blankLinePattern.ReplaceAllString(strings.Join(lines, "\n"), "\n\n"))
+	if len(text) > contextTextLimit {
+		return text[:contextTextLimit], true
+	}
+	return text, false
 }
 
 func pathSchema(required bool) map[string]any {

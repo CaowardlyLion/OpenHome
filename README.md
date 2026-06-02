@@ -25,6 +25,7 @@ OPENHOME_MAX_TOOL_ROUNDS=8
 OPENHOME_MAX_STEP_ATTEMPTS=3
 OPENHOME_PERMISSION_MODE=default
 OPENHOME_SEARCH_ENDPOINT=https://www.bing.com/search?format=rss
+OPENHOME_CLOAKBROWSER_PYTHON=.venv/bin/python
 ```
 
 `OPENHOME_MAX_STEP_ATTEMPTS` remains accepted for compatibility with existing
@@ -39,8 +40,17 @@ OpenHome routes requests through `direct_answer`, `simple_task`, or
 `planned_task`. Task execution uses native OpenAI tool calls. Final verification
 runs only when the router or executor requests it.
 
-Advanced tools can read external files, run commands, fetch URLs, download files,
-and search the web. Risky operations pause for explicit approval.
+Advanced tools can read external files, run commands, fetch compact website text,
+download files, search the web, navigate rendered pages with CloakBrowser, and
+send explicitly requested email through configured SMTP. Risky operations pause
+for explicit approval.
+
+Optional CloakBrowser support uses a Python bridge while Go remains the runtime:
+
+```bash
+.venv/bin/python -m pip install cloakbrowser
+.venv/bin/cloakbrowser install
+```
 
 ## Verify
 

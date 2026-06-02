@@ -11,11 +11,19 @@
 | `OPENHOME_MAX_STEP_ATTEMPTS` | `3` | Deprecated compatibility setting from the per-step verifier runtime. |
 | `OPENHOME_PERMISSION_MODE` | `default` | Startup advanced-tool policy: `ask`, `default`, or `allow`. |
 | `OPENHOME_SEARCH_ENDPOINT` | Bing RSS | Search adapter endpoint for `webSearch`. |
+| `OPENHOME_CLOAKBROWSER_PYTHON` | `.venv/bin/python` when present, otherwise `python3` | Python executable containing the `cloakbrowser` package. |
+| `OPENHOME_CLOAKBROWSER_BRIDGE` | `scripts/cloakbrowser_bridge.py` | Python bridge invoked by `browserInteract`. |
+| `OPENHOME_CLOAKBROWSER_PROFILE` | `.openhome/cloakbrowser-profile` | Persistent CloakBrowser profile directory. |
+| `OPENHOME_CLOAKBROWSER_HEADLESS` | `true` | Set `false` to show the CloakBrowser window. |
+| `OPENHOME_SMTP_FROM` | empty | Sender address used by `sendEmail`. |
+| `OPENHOME_SMTP_ADDR` | empty | SMTP server address, such as `smtp.example.com:587`. |
+| `OPENHOME_SMTP_USER` | empty | Optional SMTP username. |
+| `OPENHOME_SMTP_PASSWORD` | empty | Optional SMTP password. |
 
 Each request gets an append-only JSONL log under `.openhome/runs/`. Logs include
 routes, plans, skill selection, native assistant messages, tool results,
 permission requests and decisions, rejections, verification, cancellation, and
-completion. Advanced-tool output bodies remain fully logged.
+completion. Web fetches insert only compact readable text into context and logs.
 
 Shell policy files are created under `.openhome/` on first launch:
 

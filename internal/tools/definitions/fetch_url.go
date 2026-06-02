@@ -30,13 +30,14 @@ func FetchURL() tools.Definition {
 				return deniedResult, err
 			}
 			defer response.Body.Close()
-			content, truncated, err := readLimited(response.Body, 2<<20)
+			content, responseTruncated, err := readLimited(response.Body, 2<<20)
 			if err != nil {
 				return nil, err
 			}
+			text, contextTruncated := compactResponseText(content, response.Header.Get("Content-Type"))
 			return map[string]any{
 				"status": response.StatusCode, "url": response.Request.URL.String(), "headers": selectedHeaders(response.Header),
-				"body": string(content), "truncated": truncated,
+				"text": text, "truncated": responseTruncated || contextTruncated,
 			}, nil
 		},
 	}
