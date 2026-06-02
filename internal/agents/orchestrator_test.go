@@ -136,6 +136,9 @@ func TestExecutionPromptFollowsSkillReselectionToolGuidance(t *testing.T) {
 	if !strings.Contains(prompt, "navigationLinks destination matching the user's requested") {
 		t.Fatalf("prompt = %q", prompt)
 	}
+	if !strings.Contains(prompt, "observed evidence should be checked") {
+		t.Fatalf("prompt = %q", prompt)
+	}
 }
 
 func TestRequestedNavigationDestinationMatchesRequestedSection(t *testing.T) {
@@ -220,6 +223,7 @@ func TestWorkspaceQuestionSelectsSkillAndReadsFile(t *testing.T) {
 		structured: []structuredReply{
 			{"route_decision", RouteDecision{Intent: "Show current grocery list.", Lane: SimpleTask, Verification: VerifyNone, Reason: "workspace state"}},
 			{"skill_choice", SkillChoice{SkillName: "grocery-list", Reason: "reads grocery list"}},
+			{"final_verification", Verification{Status: "passed", Reason: "read file supports answer"}},
 			{"completion_report", CompletionReport{Summary: "Current grocery list:", Details: []string{"milk", "spinach"}}},
 		},
 		completes: []openai.Message{
@@ -315,6 +319,7 @@ func TestExecutorRetriesUnsupportedMissingInformationClaim(t *testing.T) {
 		structured: []structuredReply{
 			{"route_decision", RouteDecision{Intent: "Show current grocery list.", Lane: SimpleTask, Verification: VerifyNone, Reason: "workspace state"}},
 			{"skill_choice", SkillChoice{SkillName: "grocery-list", Reason: "reads list"}},
+			{"final_verification", Verification{Status: "passed", Reason: "read file supports answer"}},
 			{"completion_report", CompletionReport{Summary: "Current grocery list:", Details: []string{"milk"}}},
 		},
 		completes: []openai.Message{
@@ -395,14 +400,45 @@ func TestExecutorCanEscalateVerificationAndReselectSkill(t *testing.T) {
 			{"completion_report", CompletionReport{Summary: "Tasks written."}},
 		},
 		completes: []openai.Message{
-			{Role: "assistant", ToolCalls: []openai.ToolCall{call("1", "request_skill_reselection", `{"reason":"Need task planning."}`)}},
-			{Role: "assistant", ToolCalls: []openai.ToolCall{call("2", "request_verification", `{"reason":"Confirm mutation."}`), call("3", "writeFile", `{"path":"tasks.md","content":"- done"}`)}},
+			{Role: "assistant", ToolCalls: []openai.ToolCall{call("1", "listFiles", `{}`)}},
+			{Role: "assistant", ToolCalls: []openai.ToolCall{call("2", "request_skill_reselection", `{"reason":"Need task planning."}`)}},
+			{Role: "assistant", ToolCalls: []openai.ToolCall{call("3", "request_verification", `{"reason":"Confirm mutation."}`), call("4", "writeFile", `{"path":"tasks.md","content":"- done"}`)}},
 			{Role: "assistant", Content: "Tasks written."},
 		},
 	}
 	orchestrator, _ := fixture(t, provider)
 	if _, err := orchestrator.Handle(context.Background(), "write tasks"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPrematureSkillReselectionIsRejectedUntilEvidenceExists(t *testing.T) {
+	provider := &fakeProvider{
+		structured: []structuredReply{
+			{"route_decision", RouteDecision{Intent: "Inspect files.", Lane: SimpleTask, Verification: VerifyNone, Reason: "narrow"}},
+			{"skill_choice", SkillChoice{SkillName: "grocery-list", Reason: "initial"}},
+			{"final_verification", Verification{Status: "passed", Reason: "listFiles observed workspace"}},
+			{"completion_report", CompletionReport{Summary: "Files inspected."}},
+		},
+		completes: []openai.Message{
+			{Role: "assistant", ToolCalls: []openai.ToolCall{call("1", "request_skill_reselection", `{"reason":"Different skill maybe."}`)}},
+			{Role: "assistant", ToolCalls: []openai.ToolCall{call("2", "listFiles", `{}`)}},
+			{Role: "assistant", Content: "Files inspected."},
+		},
+	}
+	orchestrator, _ := fixture(t, provider)
+	if _, err := orchestrator.Handle(context.Background(), "inspect files"); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, request := range provider.requests {
+		if containsText(request.history, "Skill reselection is premature") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("requests = %#v", provider.requests)
 	}
 }
 

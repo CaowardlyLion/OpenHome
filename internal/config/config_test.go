@@ -30,3 +30,13 @@ func TestLoadFromReadsContextBudget(t *testing.T) {
 		t.Fatalf("MaxContextBytes = %d", cfg.MaxContextBytes)
 	}
 }
+
+func TestLoadFromUsesMorePersistentDefaultToolRounds(t *testing.T) {
+	cfg, err := LoadFrom(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MaxToolRounds != 12 {
+		t.Fatalf("MaxToolRounds = %d", cfg.MaxToolRounds)
+	}
+}

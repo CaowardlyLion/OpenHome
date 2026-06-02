@@ -10,7 +10,7 @@ import (
 
 func WriteFile() tools.Definition {
 	return tools.Definition{
-		Name: "writeFile", Description: "Write a UTF-8 text file inside the workspace.",
+		Name: "writeFile", Effect: tools.EffectMutate, Description: "Write a UTF-8 text file inside the workspace.",
 		Parameters: map[string]any{
 			"type": "object", "additionalProperties": false, "required": []string{"path", "content"},
 			"properties": map[string]any{"path": map[string]any{"type": "string"}, "content": map[string]any{"type": "string"}},

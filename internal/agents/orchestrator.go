@@ -37,6 +37,28 @@ type Orchestrator struct {
 
 const noSkillName = "none"
 
+const (
+	toolRequestSkillReselection = "request_skill_reselection"
+	toolRequestVerification     = "request_verification"
+	toolWebSearch               = "webSearch"
+	toolFetchURL                = "fetchURL"
+	toolBrowserInteract         = "browserInteract"
+)
+
+type executionState struct {
+	successful           map[string]bool
+	successfulTools      map[string]bool
+	visitedBrowserURLs   map[string]bool
+	pendingNavigationURL string
+	observedEvidence     bool
+}
+
+type executionControl struct {
+	reselectReason string
+	policy         VerificationPolicy
+	handled        bool
+}
+
 func NewOrchestrator(client Provider, catalog skills.Catalog, cfg config.Config, registry *tools.Registry, status func(StatusEvent)) *Orchestrator {
 	if status == nil {
 		status = func(StatusEvent) {}
@@ -227,12 +249,13 @@ func (o *Orchestrator) execute(ctx context.Context, history, run []openai.Messag
 		return run, policy, "", err
 	}
 	nativeTools = append(nativeTools, controlTools()...)
-	successful := map[string]bool{}
-	successfulTools := map[string]bool{}
-	visitedBrowserURLs := map[string]bool{}
-	pendingNavigationURL := ""
 	messages := o.active(history, run)
-	observedWorkspace := hasWorkspaceToolEvidence(messages)
+	state := executionState{
+		successful:         map[string]bool{},
+		successfulTools:    map[string]bool{},
+		visitedBrowserURLs: map[string]bool{},
+		observedEvidence:   hasWorkspaceToolEvidence(messages),
+	}
 	messages = append(messages, openai.Message{Role: "user", Content: ExecutionPrompt(task, step, skill)})
 	messages, _ = session.TrimMessages(messages, o.config.MaxContextBytes)
 	for round := 1; round <= o.config.MaxToolRounds; round++ {
@@ -247,24 +270,8 @@ func (o *Orchestrator) execute(ctx context.Context, history, run []openai.Messag
 		run = append(run, assistant)
 		_ = logger.Append("native_assistant_message", map[string]any{"stepId": step.ID, "round": round, "message": assistant})
 		if len(assistant.ToolCalls) == 0 {
-			if pendingNavigationURL != "" {
-				correction := openai.Message{Role: "user", Content: "Browser navigation is incomplete. The opened page exposed a navigation destination matching the user's requested resource. Open it with a read-only browserInteract call before answering: " + pendingNavigationURL}
-				messages = append(messages, correction)
-				run = append(run, correction)
-				_ = logger.Append("execution_retry", map[string]any{"stepId": step.ID, "round": round, "reason": correction.Content})
-				o.emit("retry", correction.Content)
-				continue
-			}
-			if requiresOpenedWebSource(skill.Name, successfulTools) {
-				correction := openai.Message{Role: "user", Content: "Web research is incomplete. Search snippets are discovery hints only. Refine the search if needed, then open relevant source pages with fetchURL or browserInteract before answering. Do not ask the user whether to continue."}
-				messages = append(messages, correction)
-				run = append(run, correction)
-				_ = logger.Append("execution_retry", map[string]any{"stepId": step.ID, "round": round, "reason": correction.Content})
-				o.emit("retry", correction.Content)
-				continue
-			}
-			if !observedWorkspace {
-				correction := openai.Message{Role: "user", Content: "No observed tool evidence exists yet. Use an allowed tool to inspect workspace state before completing the outcome or saying information is missing."}
+			if reason := completionBlocker(skill.Name, state); reason != "" {
+				correction := openai.Message{Role: "user", Content: reason}
 				messages = append(messages, correction)
 				run = append(run, correction)
 				_ = logger.Append("execution_retry", map[string]any{"stepId": step.ID, "round": round, "reason": correction.Content})
@@ -275,24 +282,28 @@ func (o *Orchestrator) execute(ctx context.Context, history, run []openai.Messag
 		}
 		for _, call := range assistant.ToolCalls {
 			o.emit("tool", call.Function.Name)
-			if call.Function.Name == "request_skill_reselection" {
-				reason := reasonArg(call.Function.Arguments)
-				toolMessage := toolResult(call.ID, map[string]any{"accepted": true, "reason": reason})
-				run = append(run, toolMessage)
-				return run, policy, reason, nil
-			}
-			if call.Function.Name == "request_verification" {
-				reason := reasonArg(call.Function.Arguments)
-				policy = VerifyFinal
-				o.emit("verification", "Final verification requested: "+reason)
-				toolMessage := toolResult(call.ID, map[string]any{"accepted": true, "policy": policy})
+			if call.Function.Name == toolRequestSkillReselection && !state.observedEvidence {
+				rejection := map[string]any{"rejected": true, "error": "Skill reselection is premature. Try the current skill instructions and available tools first; request reselection only after observed evidence shows this skill cannot handle the outcome."}
+				toolMessage := toolResult(call.ID, rejection)
 				messages = append(messages, toolMessage)
 				run = append(run, toolMessage)
-				_ = logger.Append("verification_requested", map[string]any{"stepId": step.ID, "reason": reason})
+				_ = logger.Append("tool_rejected", map[string]any{"stepId": step.ID, "round": round, "request": call, "result": rejection})
+				o.emit("retry", rejection["error"].(string))
+				continue
+			}
+			control := o.handleControlTool(call, policy, logger, step.ID)
+			if control.handled {
+				policy = control.policy
+				toolMessage := toolResult(call.ID, controlToolResult(call.Function.Name, policy, control.reselectReason))
+				messages = append(messages, toolMessage)
+				run = append(run, toolMessage)
+				if control.reselectReason != "" {
+					return run, policy, control.reselectReason, nil
+				}
 				continue
 			}
 			key := call.Function.Name + "\x00" + call.Function.Arguments
-			if successful[key] {
+			if state.successful[key] {
 				rejection := map[string]any{"rejected": true, "error": "Duplicate tool request rejected; reuse the prior successful result."}
 				toolMessage := toolResult(call.ID, rejection)
 				messages = append(messages, toolMessage)
@@ -308,18 +319,11 @@ func (o *Orchestrator) execute(ctx context.Context, history, run []openai.Messag
 				o.emit("retry", executeErr.Error())
 				_ = logger.Append("tool_rejected", map[string]any{"stepId": step.ID, "round": round, "request": call, "result": output})
 			} else {
-				successful[key] = true
-				successfulTools[call.Function.Name] = true
-				observedWorkspace = true
-				if call.Function.Name == "browserInteract" {
-					if result, ok := execution.Result.(map[string]any); ok {
-						visitedBrowserURLs[normalizedURL(stringValue(result["url"]))] = true
-						if destination := requestedNavigationDestination(task, result); destination != "" && !visitedBrowserURLs[normalizedURL(destination)] {
-							pendingNavigationURL = destination
-						} else if visitedBrowserURLs[normalizedURL(pendingNavigationURL)] {
-							pendingNavigationURL = ""
-						}
-					}
+				state.recordSuccess(call.Function.Name, key, execution.Result, task)
+				if o.tools.Effect(call.Function.Name) == tools.EffectObserve && policy != VerifyFinal {
+					policy = VerifyFinal
+					o.emit("verification", "Final verification requested: observed information should be checked")
+					_ = logger.Append("verification_requested", map[string]any{"stepId": step.ID, "reason": "Observed information should be checked before answering."})
 				}
 				_ = logger.Append("tool_result", map[string]any{"stepId": step.ID, "round": round, "request": call, "result": execution})
 			}
@@ -330,6 +334,61 @@ func (o *Orchestrator) execute(ctx context.Context, history, run []openai.Messag
 		messages, _ = session.TrimMessages(messages, o.config.MaxContextBytes)
 	}
 	return run, policy, "", fmt.Errorf("outcome exceeded %d tool rounds: %s", o.config.MaxToolRounds, step.Goal)
+}
+
+func (o *Orchestrator) handleControlTool(call openai.ToolCall, policy VerificationPolicy, logger *runlog.RunLogger, stepID string) executionControl {
+	reason := reasonArg(call.Function.Arguments)
+	switch call.Function.Name {
+	case toolRequestSkillReselection:
+		return executionControl{handled: true, policy: policy, reselectReason: reason}
+	case toolRequestVerification:
+		o.emit("verification", "Final verification requested: "+reason)
+		_ = logger.Append("verification_requested", map[string]any{"stepId": stepID, "reason": reason})
+		return executionControl{handled: true, policy: VerifyFinal}
+	default:
+		return executionControl{policy: policy}
+	}
+}
+
+func controlToolResult(name string, policy VerificationPolicy, reason string) map[string]any {
+	if name == toolRequestSkillReselection {
+		return map[string]any{"accepted": true, "reason": reason}
+	}
+	return map[string]any{"accepted": true, "policy": policy}
+}
+
+func (s *executionState) recordSuccess(toolName, key string, result any, task string) {
+	s.successful[key] = true
+	s.successfulTools[toolName] = true
+	s.observedEvidence = true
+	if toolName != toolBrowserInteract {
+		return
+	}
+	page, ok := result.(map[string]any)
+	if !ok {
+		return
+	}
+	s.visitedBrowserURLs[normalizedURL(stringValue(page["url"]))] = true
+	if destination := requestedNavigationDestination(task, page); destination != "" && !s.visitedBrowserURLs[normalizedURL(destination)] {
+		s.pendingNavigationURL = destination
+		return
+	}
+	if s.visitedBrowserURLs[normalizedURL(s.pendingNavigationURL)] {
+		s.pendingNavigationURL = ""
+	}
+}
+
+func completionBlocker(skillName string, state executionState) string {
+	if state.pendingNavigationURL != "" {
+		return "Browser navigation is incomplete. The opened page exposed a navigation destination matching the user's requested resource. Open it with a read-only browserInteract call before answering: " + state.pendingNavigationURL
+	}
+	if requiresOpenedWebSource(skillName, state.successfulTools) {
+		return "Web research is incomplete. Search snippets are discovery hints only. Refine the search if needed, then open relevant source pages with fetchURL or browserInteract before answering. Do not ask the user whether to continue."
+	}
+	if !state.observedEvidence {
+		return "No observed tool evidence exists yet. Use an allowed tool to inspect available state before completing the outcome or saying information is missing."
+	}
+	return ""
 }
 
 func requestedNavigationDestination(task string, result map[string]any) string {
@@ -365,7 +424,7 @@ func stringValue(value any) string {
 }
 
 func requiresOpenedWebSource(skillName string, successfulTools map[string]bool) bool {
-	return skillName == "web-search" && successfulTools["webSearch"] && !successfulTools["fetchURL"] && !successfulTools["browserInteract"]
+	return skillName == "web-search" && successfulTools[toolWebSearch] && !successfulTools[toolFetchURL] && !successfulTools[toolBrowserInteract]
 }
 
 func (o *Orchestrator) complete(ctx context.Context, task string, history, run []openai.Message, logger *runlog.RunLogger) (CompletionReport, error) {
@@ -381,8 +440,8 @@ func (o *Orchestrator) complete(ctx context.Context, task string, history, run [
 func controlTools() []openai.Tool {
 	parameters := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"reason"}, "properties": map[string]any{"reason": map[string]any{"type": "string"}}}
 	return []openai.Tool{
-		{Type: "function", Function: openai.FunctionDefinition{Name: "request_skill_reselection", Description: "Ask the librarian to select a different skill when the current playbook cannot handle this outcome.", Parameters: parameters}},
-		{Type: "function", Function: openai.FunctionDefinition{Name: "request_verification", Description: "Escalate this task to one final verification pass when mutation risk or uncertain evidence warrants it.", Parameters: parameters}},
+		{Type: "function", Function: openai.FunctionDefinition{Name: toolRequestSkillReselection, Description: "Ask the librarian to select a different skill when the current playbook cannot handle this outcome.", Parameters: parameters}},
+		{Type: "function", Function: openai.FunctionDefinition{Name: toolRequestVerification, Description: "Escalate this task to one final verification pass when mutation risk or uncertain evidence warrants it.", Parameters: parameters}},
 	}
 }
 
@@ -404,7 +463,7 @@ func toolResult(id string, value any) openai.Message {
 func hasWorkspaceToolEvidence(messages []openai.Message) bool {
 	for _, message := range messages {
 		for _, call := range message.ToolCalls {
-			if call.Function.Name != "request_skill_reselection" && call.Function.Name != "request_verification" {
+			if call.Function.Name != toolRequestSkillReselection && call.Function.Name != toolRequestVerification {
 				return true
 			}
 		}

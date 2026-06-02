@@ -50,6 +50,11 @@ type Manager struct {
 	audit                func(string, any)
 }
 
+var unsafeInspectionFlags = map[string][]string{
+	"find": []string{"-delete", "-exec", "-execdir", "-ok", "-okdir"},
+	"rg":   []string{"--pre"},
+}
+
 func (m *Manager) SetAudit(audit func(string, any)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -189,23 +194,14 @@ func NormalizeCommand(command string, args []string) string {
 
 func (m *Manager) safeInspection(command string, args []string) bool {
 	base := filepath.Base(command)
-	if base == "pwd" && len(args) == 0 {
-		return true
-	}
-	switch base {
-	case "ls", "cat", "head", "tail", "wc", "rg", "find":
-	default:
-		return false
-	}
 	for _, arg := range args {
 		if strings.Contains(arg, "..") || filepath.IsAbs(arg) {
 			return false
 		}
-		if base == "find" && (arg == "-delete" || arg == "-exec" || arg == "-execdir" || arg == "-ok" || arg == "-okdir") {
-			return false
-		}
-		if base == "rg" && (arg == "--pre" || strings.HasPrefix(arg, "--pre=")) {
-			return false
+		for _, unsafe := range unsafeInspectionFlags[base] {
+			if arg == unsafe || strings.HasPrefix(arg, unsafe+"=") {
+				return false
+			}
 		}
 	}
 	return true

@@ -11,7 +11,7 @@ import (
 
 func DownloadFile() tools.Definition {
 	return tools.Definition{
-		Name: "downloadFile", Advanced: true, Description: "Download an HTTP(S) URL into the workspace after user permission. Maximum size: 50 MB.",
+		Name: "downloadFile", Advanced: true, Effect: tools.EffectMutate, Description: "Download an HTTP(S) URL into the workspace after user permission. Maximum size: 50 MB.",
 		Parameters: urlReasonSchema(true),
 		Execute: func(ctx context.Context, toolContext tools.Context, args map[string]any) (any, error) {
 			rawURL, err := stringArg(args, "url")

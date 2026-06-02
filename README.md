@@ -21,7 +21,7 @@ OPENAI_MODEL=gemma-4-e2b-it-bf16
 OPENAI_API_KEY=
 OPENHOME_SKILLS_DIR=./skills
 OPENHOME_WORKSPACE=./workspace
-OPENHOME_MAX_TOOL_ROUNDS=8
+OPENHOME_MAX_TOOL_ROUNDS=12
 OPENHOME_MAX_CONTEXT_BYTES=98304
 OPENHOME_MAX_STEP_ATTEMPTS=3
 OPENHOME_PERMISSION_MODE=default
@@ -36,10 +36,14 @@ per-step retries.
 Type `/new` to clear chat context. Type `/verbose` to show or hide live execution
 details. Type `/permissions` to choose advanced-tool approval mode. Type `/exit` to leave the TUI. Press `Ctrl+C` during a task to cancel
 its context while preserving the JSONL event log under `.openhome/runs/`.
+Assistant replies keep basic Markdown structure in the transcript, including
+headings, bullets, numbered lists, and code fences.
 
 OpenHome routes requests through `direct_answer`, `simple_task`, or
 `planned_task`. Task execution uses native OpenAI tool calls. Final verification
-runs only when the router or executor requests it.
+runs when the router or executor requests it, and is automatically escalated
+when the answer depends on observed information from read/search/browser/fetch
+tools.
 
 Advanced tools can read external files, run commands, fetch compact website text,
 download files, search the web, navigate rendered pages with CloakBrowser, and

@@ -21,8 +21,16 @@ type Definition struct {
 	Description string
 	Parameters  map[string]any
 	Advanced    bool
+	Effect      Effect
 	Execute     func(context.Context, Context, map[string]any) (any, error)
 }
+
+type Effect string
+
+const (
+	EffectObserve Effect = "observe"
+	EffectMutate  Effect = "mutate"
+)
 
 type Execution struct {
 	Tool   string         `json:"tool"`
@@ -42,6 +50,9 @@ func NewRegistry(workspaceDir string, permissionManager *permissions.Manager, de
 		if _, ok := registry.definitions[definition.Name]; ok {
 			return nil, fmt.Errorf("duplicate tool name: %s", definition.Name)
 		}
+		if definition.Effect == "" {
+			definition.Effect = EffectObserve
+		}
 		registry.definitions[definition.Name] = definition
 		registry.names = append(registry.names, definition.Name)
 	}
@@ -54,6 +65,14 @@ func (r *Registry) Names() []string {
 
 func (r *Registry) Permissions() *permissions.Manager {
 	return r.context.Permissions
+}
+
+func (r *Registry) Effect(name string) Effect {
+	definition, ok := r.definitions[name]
+	if !ok || definition.Effect == "" {
+		return EffectObserve
+	}
+	return definition.Effect
 }
 
 func (r *Registry) OpenAITools(allowed []string) ([]openai.Tool, error) {

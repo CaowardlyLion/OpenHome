@@ -27,7 +27,7 @@ type Model struct {
 	viewport            viewport.Model
 	input               textarea.Model
 	spinner             spinner.Model
-	transcript          []string
+	transcript          []transcriptEntry
 	status              string
 	busy                bool
 	verbose             bool
@@ -41,6 +41,11 @@ type Model struct {
 	cancel              context.CancelFunc
 	width               int
 	height              int
+}
+
+type transcriptEntry struct {
+	label string
+	text  string
 }
 
 type StatusMsg agents.StatusEvent
@@ -58,7 +63,10 @@ func New(handler Handler, options ...any) Model {
 	input.Focus()
 	model := Model{
 		handler: handler, commands: commands.Default(), viewport: viewport.New(), input: input,
-		spinner: spinner.New(), transcript: []string{"OpenHome", "Type a request or use /new and /exit."},
+		spinner: spinner.New(), transcript: []transcriptEntry{
+			{label: "system", text: "OpenHome"},
+			{label: "system", text: "Type a request or use /new and /exit."},
+		},
 		width: 80, height: 24,
 	}
 	for _, option := range options {
@@ -335,7 +343,7 @@ func waitForApproval(prompter *permissions.ChannelPrompter) tea.Cmd {
 }
 
 func (m *Model) appendTranscript(label, text string) {
-	m.transcript = append(m.transcript, fmt.Sprintf("[%s] %s", label, text))
+	m.transcript = append(m.transcript, transcriptEntry{label: label, text: text})
 	m.refreshTranscript()
 	m.viewport.GotoBottom()
 }
@@ -353,9 +361,79 @@ func (m *Model) resize() {
 func (m *Model) refreshTranscript() {
 	entries := make([]string, len(m.transcript))
 	for index, entry := range m.transcript {
-		entries[index] = wrapText(entry, m.width)
+		entries[index] = renderTranscriptEntry(entry, m.width)
 	}
 	m.viewport.SetContent(strings.Join(entries, "\n\n"))
+}
+
+func renderTranscriptEntry(entry transcriptEntry, width int) string {
+	prefix := "[" + entry.label + "] "
+	bodyWidth := max(10, width-lipgloss.Width(prefix))
+	if entry.label == "assistant" {
+		return prefix + renderMarkdown(entry.text, bodyWidth, strings.Repeat(" ", lipgloss.Width(prefix)))
+	}
+	return wrapText(prefix+entry.text, width)
+}
+
+func renderMarkdown(text string, width int, continuation string) string {
+	var lines []string
+	inCode := false
+	for _, raw := range strings.Split(text, "\n") {
+		line := strings.TrimRight(raw, " \t")
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") {
+			inCode = !inCode
+			lines = append(lines, continuation+trimmed)
+			continue
+		}
+		if trimmed == "" {
+			lines = append(lines, "")
+			continue
+		}
+		if inCode {
+			lines = append(lines, continuation+"  "+line)
+			continue
+		}
+		marker, rest := markdownMarker(trimmed)
+		if marker != "" {
+			indent := continuation + strings.Repeat(" ", lipgloss.Width(marker))
+			lines = append(lines, continuation+marker+wrapText(rest, width-lipgloss.Width(marker)))
+			if len(lines) > 0 {
+				lines[len(lines)-1] = strings.ReplaceAll(lines[len(lines)-1], "\n", "\n"+indent)
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmed, "#") {
+			heading := strings.TrimSpace(strings.TrimLeft(trimmed, "#"))
+			lines = append(lines, continuation+lipgloss.NewStyle().Bold(true).Render(heading))
+			continue
+		}
+		lines = append(lines, continuation+wrapText(trimmed, width))
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	first := strings.TrimPrefix(lines[0], continuation)
+	lines[0] = first
+	return strings.Join(lines, "\n")
+}
+
+func markdownMarker(line string) (string, string) {
+	for _, marker := range []string{"- ", "* "} {
+		if strings.HasPrefix(line, marker) {
+			return marker, strings.TrimSpace(line[len(marker):])
+		}
+	}
+	dot := strings.Index(line, ". ")
+	if dot > 0 {
+		for _, char := range line[:dot] {
+			if char < '0' || char > '9' {
+				return "", ""
+			}
+		}
+		return line[:dot+2], strings.TrimSpace(line[dot+2:])
+	}
+	return "", ""
 }
 
 func wrapText(text string, width int) string {

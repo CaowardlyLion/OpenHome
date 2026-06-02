@@ -31,7 +31,9 @@ func RoutingPrompt(message string) string {
 If an answer may depend on private, local, workspace, household, preference, pantry, grocery, meal-plan, or task-list state,
 never choose direct_answer. Choose simple_task so the librarian can select a skill and the executor can inspect tools.
 If an answer needs fresh internet information or web research, choose simple_task so the executor can use web tools.
-Choose final verification only when complexity, mutation risk, or uncertain evidence warrants it. Otherwise choose none.
+Choose final verification for requests that provide factual information from current, external, local, private, or tool-observed evidence.
+Also choose final verification when complexity, mutation risk, or uncertain evidence warrants it. Use none only for low-risk direct answers
+or trivial narrow tasks whose correctness does not depend on retrieved evidence.
 
 Message:
 %s`, message)
@@ -79,7 +81,8 @@ When browserInteract returns a navigationLinks destination matching the user's r
 open that destination with another read-only browserInteract call before completing. Do not substitute related content from a broader page.
 When the outcome is complete, reply with a brief completion sentence and no tool call.
 Call request_skill_reselection only if this skill cannot handle the outcome.
-Call request_verification if observed evidence makes final verification prudent.`, task, jsonText(step), skill.Name, skill.AllowedTools, skill.Content)
+Call request_verification if observed evidence should be checked before answering. This is especially important for current,
+external, local, private, or factual information tasks.`, task, jsonText(step), skill.Name, skill.AllowedTools, skill.Content)
 }
 
 func VerificationPrompt(task string) string {

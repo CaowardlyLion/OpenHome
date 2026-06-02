@@ -73,3 +73,17 @@ func TestRegistryRejectsSymlinkEscapes(t *testing.T) {
 		t.Fatalf("file symlink error = %v", err)
 	}
 }
+
+func TestRegistryExposesToolEffects(t *testing.T) {
+	registry, _ := registry(t)
+	for _, name := range []string{"listFiles", "readFile", "searchFiles", "webSearch", "fetchURL", "browserInteract"} {
+		if effect := registry.Effect(name); effect != tools.EffectObserve {
+			t.Fatalf("%s effect = %s", name, effect)
+		}
+	}
+	for _, name := range []string{"writeFile", "downloadFile", "runCommand", "sendEmail"} {
+		if effect := registry.Effect(name); effect != tools.EffectMutate {
+			t.Fatalf("%s effect = %s", name, effect)
+		}
+	}
+}

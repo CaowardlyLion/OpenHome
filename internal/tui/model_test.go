@@ -157,3 +157,15 @@ func TestModelWrapsContentToTerminalWidth(t *testing.T) {
 		}
 	}
 }
+
+func TestAssistantMarkdownKeepsListAndCodeFormatting(t *testing.T) {
+	rendered := renderTranscriptEntry(transcriptEntry{
+		label: "assistant",
+		text:  "## Result\n\n- First item with enough words to wrap cleanly\n- Second item\n\n```sh\ngo test ./...\n```",
+	}, 42)
+	for _, expected := range []string{"[assistant]", "Result", "- First item", "to wrap cleanly", "```sh", "go test ./..."} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("missing %q in render:\n%s", expected, rendered)
+		}
+	}
+}

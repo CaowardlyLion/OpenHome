@@ -29,7 +29,8 @@ internal/
 6. Select one skill for the first execution unit and reuse it.
 7. Execute with native OpenAI `tool_calls` and `tool` messages. Advanced calls pause for permission when policy requires it.
 8. Reselect only after `request_skill_reselection`.
-9. Escalate optional final verification with `request_verification`.
+9. Escalate final verification with `request_verification`, and automatically
+   verify answers that depend on observed information from read/search/browser/fetch tools.
 10. Produce a completion report and retain native messages in session history.
 
 Router, librarian, planner, verifier, and completion calls use JSON schema.

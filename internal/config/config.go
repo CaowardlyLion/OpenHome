@@ -31,7 +31,7 @@ func Load() (Config, error) {
 }
 
 func LoadFrom(cwd string) (Config, error) {
-	rounds, err := positiveInteger("OPENHOME_MAX_TOOL_ROUNDS", 8)
+	rounds, err := positiveInteger("OPENHOME_MAX_TOOL_ROUNDS", 12)
 	if err != nil {
 		return Config{}, err
 	}

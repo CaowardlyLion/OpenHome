@@ -34,7 +34,7 @@ func (b *cappedBuffer) Write(content []byte) (int, error) {
 
 func RunCommand() tools.Definition {
 	return tools.Definition{
-		Name: "runCommand", Advanced: true, Description: "Run one binary directly from the workspace after permission when required. No shell pipes or redirection.",
+		Name: "runCommand", Advanced: true, Effect: tools.EffectMutate, Description: "Run one binary directly from the workspace after permission when required. No shell pipes or redirection.",
 		Parameters: map[string]any{
 			"type": "object", "additionalProperties": false, "required": []string{"command", "reason"},
 			"properties": map[string]any{

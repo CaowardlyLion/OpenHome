@@ -62,5 +62,7 @@ Default mode automatically permits tools listed in
 `.openhome/default-allow-tools.txt` and workspace-safe inspection commands
 listed in `.openhome/default-allow-commands.txt`. The generated shell defaults
 include `ls`, `pwd`, `find`, `cat`, `head`, `tail`, `wc`, and `rg`. Host paths,
-risky flags, and write-like shell commands prompt. Additional shell regex allow
-and deny files live under `.openhome/`; deny rules always win.
+risky flags, and write-like shell commands prompt. The editable command regexes
+decide what may auto-run; code applies generic path safety plus a small
+deny-flag table for commands such as `find` and `rg`. Additional shell regex
+allow and deny files live under `.openhome/`; deny rules always win.

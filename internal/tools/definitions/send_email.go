@@ -13,7 +13,7 @@ import (
 
 func SendEmail() tools.Definition {
 	return tools.Definition{
-		Name: "sendEmail", Advanced: true,
+		Name: "sendEmail", Advanced: true, Effect: tools.EffectMutate,
 		Description: "Send an email through configured SMTP only after explicit user approval. Use only when the user explicitly asks to send, not merely draft, an email.",
 		Parameters: map[string]any{
 			"type": "object", "additionalProperties": false, "required": []string{"to", "subject", "body", "reason"},
