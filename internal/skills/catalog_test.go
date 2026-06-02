@@ -34,3 +34,19 @@ func TestLoadCatalogRejectsUnknownTool(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestRepositoryWebSearchSkillLoads(t *testing.T) {
+	catalog, err := skills.Load(filepath.Join("..", "..", "skills"), []string{
+		"listFiles", "readFile", "searchFiles", "writeFile", "webSearch", "fetchURL",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	skill, err := catalog.Find("web-search")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(skill.Content, "Treat search titles and snippets as") || !strings.Contains(skill.Content, "`fetchURL`") {
+		t.Fatalf("skill content = %q", skill.Content)
+	}
+}
