@@ -82,9 +82,9 @@ func TestFetchDownloadAndSearch(t *testing.T) {
 	}
 }
 
-func TestCompactResponseTextRemovesHTMLNoiseAndCapsContext(t *testing.T) {
+func TestCompactResponseTextNormalizesAndCapsContext(t *testing.T) {
 	text, truncated := compactResponseText([]byte(`<html><style>hide</style><script>ignore()</script><h1>Hello &amp; welcome</h1><p>Useful text.</p></html>`), "text/html")
-	if truncated || strings.Contains(text, "ignore") || text != "Hello & welcome\n\nUseful text." {
+	if truncated || text != `<html><style>hide</style><script>ignore()</script><h1>Hello &amp; welcome</h1><p>Useful text.</p></html>` {
 		t.Fatalf("text = %q, truncated = %v", text, truncated)
 	}
 	text, truncated = compactResponseText([]byte(strings.Repeat("x", contextTextLimit+1)), "text/plain")
@@ -186,13 +186,11 @@ func TestFetchRedirectDenialIsStructured(t *testing.T) {
 		response.Write([]byte("final"))
 	}))
 	defer server.Close()
-	calls := 0
-	manager, err := permissions.New(t.TempDir(), t.TempDir(), permissions.Default, func(context.Context, permissions.Request) permissions.Decision {
-		calls++
-		if calls == 1 {
-			return permissions.AllowOnce
+	manager, err := permissions.New(t.TempDir(), t.TempDir(), permissions.Default, func(_ context.Context, request permissions.Request) permissions.Decision {
+		if strings.Contains(request.Reason, "redirect") {
+			return permissions.Deny
 		}
-		return permissions.Deny
+		return permissions.AllowOnce
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -246,6 +244,17 @@ func TestBrowserInteractActionsAlwaysPrompt(t *testing.T) {
 	_, err = registry.Execute(context.Background(), "browserInteract", `{"url":"https://example.com","reason":"inspect rendered page","actions":[{"action":"wait","ms":100}]}`)
 	if err != nil || prompts != 1 || runner.calls != 1 {
 		t.Fatalf("prompts = %d, calls = %d, err = %v", prompts, runner.calls, err)
+	}
+}
+
+func TestSanitizeBridgeErrorRemovesTraceback(t *testing.T) {
+	message := "Element 'a[href*=\\\"/news\\\"]' failed attached check: element not found in DOM\nTraceback (most recent call last):\n  File \"bridge.py\", line 1, in <module>\nplaywright.TimeoutError: noisy stack"
+	sanitized := sanitizeBridgeError(message)
+	if strings.Contains(sanitized, "Traceback") || strings.Contains(sanitized, "bridge.py") {
+		t.Fatalf("sanitized = %q", sanitized)
+	}
+	if !strings.Contains(sanitized, "element not found") {
+		t.Fatalf("sanitized = %q", sanitized)
 	}
 }
 

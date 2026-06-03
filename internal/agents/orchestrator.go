@@ -40,17 +40,11 @@ const noSkillName = "none"
 const (
 	toolRequestSkillReselection = "request_skill_reselection"
 	toolRequestVerification     = "request_verification"
-	toolWebSearch               = "webSearch"
-	toolFetchURL                = "fetchURL"
-	toolBrowserInteract         = "browserInteract"
 )
 
 type executionState struct {
-	successful           map[string]bool
-	successfulTools      map[string]bool
-	visitedBrowserURLs   map[string]bool
-	pendingNavigationURL string
-	observedEvidence     bool
+	successful       map[string]bool
+	observedEvidence bool
 }
 
 type executionControl struct {
@@ -151,33 +145,37 @@ func (o *Orchestrator) Handle(ctx context.Context, userMessage string) (result R
 	}
 
 	policy := route.Verification
-	var current *skills.Skill
+	var activeSkills []skills.Skill
 	for index, step := range steps {
 		o.emit("step", fmt.Sprintf("Step %d/%d: %s", index+1, len(steps), step.Goal))
-		if current == nil {
-			current, run, err = o.selectSkill(ctx, history, run, logger, userMessage, step, "")
+		if len(activeSkills) == 0 {
+			var selected *skills.Skill
+			selected, run, err = o.selectSkill(ctx, history, run, logger, userMessage, step, "")
 			if err != nil {
 				return result, err
 			}
+			activeSkills = appendSkill(activeSkills, *selected)
 		} else {
-			o.emit("skill", "Reusing skill: "+current.Name)
-			_ = logger.Append("skill_reused", map[string]any{"stepId": step.ID, "skillName": current.Name})
-			run = appendEvent(run, "skill_reused", map[string]any{"stepId": step.ID, "skillName": current.Name})
+			o.emit("skill", "Reusing skills: "+skillNames(activeSkills))
+			_ = logger.Append("skills_reused", map[string]any{"stepId": step.ID, "skillNames": skillNameList(activeSkills)})
+			run = appendEvent(run, "skills_reused", map[string]any{"stepId": step.ID, "skillNames": skillNameList(activeSkills)})
 		}
 		for {
 			var reselectReason string
-			run, policy, reselectReason, err = o.execute(ctx, history, run, logger, userMessage, step, *current, policy)
+			run, policy, reselectReason, err = o.execute(ctx, history, run, logger, userMessage, step, activeSkills, policy)
 			if err != nil {
 				return result, err
 			}
 			if reselectReason == "" {
 				break
 			}
-			o.emit("skill", "Reselecting skill: "+reselectReason)
-			current, run, err = o.selectSkill(ctx, history, run, logger, userMessage, step, reselectReason)
+			o.emit("skill", "Adding skill: "+reselectReason)
+			var selected *skills.Skill
+			selected, run, err = o.selectSkill(ctx, history, run, logger, userMessage, step, reselectReason)
 			if err != nil {
 				return result, err
 			}
+			activeSkills = appendSkill(activeSkills, *selected)
 		}
 	}
 
@@ -190,7 +188,9 @@ func (o *Orchestrator) Handle(ctx context.Context, userMessage string) (result R
 		_ = logger.Append("verification", verification)
 		run = appendEvent(run, "verification", verification)
 		if verification.Status != "passed" {
-			return result, fmt.Errorf("final verification failed: %s", verification.Reason)
+			o.emit("verification", "Final verification found a limitation: "+verification.Reason)
+			_ = logger.Append("verification_failed_nonfatal", verification)
+			run = appendEvent(run, "verification_failed_nonfatal", verification)
 		}
 	} else {
 		o.emit("verification", "Skipped final verification")
@@ -243,7 +243,7 @@ func (o *Orchestrator) selectSkill(ctx context.Context, history, run []openai.Me
 	return &skill, run, nil
 }
 
-func (o *Orchestrator) execute(ctx context.Context, history, run []openai.Message, logger *runlog.RunLogger, task string, step Step, skill skills.Skill, policy VerificationPolicy) ([]openai.Message, VerificationPolicy, string, error) {
+func (o *Orchestrator) execute(ctx context.Context, history, run []openai.Message, logger *runlog.RunLogger, task string, step Step, activeSkills []skills.Skill, policy VerificationPolicy) ([]openai.Message, VerificationPolicy, string, error) {
 	nativeTools, err := o.tools.AllOpenAITools()
 	if err != nil {
 		return run, policy, "", err
@@ -251,14 +251,33 @@ func (o *Orchestrator) execute(ctx context.Context, history, run []openai.Messag
 	nativeTools = append(nativeTools, controlTools()...)
 	messages := o.active(history, run)
 	state := executionState{
-		successful:         map[string]bool{},
-		successfulTools:    map[string]bool{},
-		visitedBrowserURLs: map[string]bool{},
-		observedEvidence:   hasWorkspaceToolEvidence(messages),
+		successful:       map[string]bool{},
+		observedEvidence: hasWorkspaceToolEvidence(messages),
 	}
-	messages = append(messages, openai.Message{Role: "user", Content: ExecutionPrompt(task, step, skill)})
+	messages = append(messages, openai.Message{Role: "user", Content: ExecutionPrompt(task, step, activeSkills)})
 	messages, _ = session.TrimMessages(messages, o.config.MaxContextBytes)
-	for round := 1; round <= o.config.MaxToolRounds; round++ {
+	for round := 1; ; round++ {
+		if o.config.MaxToolRounds > 0 && round > o.config.MaxToolRounds {
+			limitMessage := openai.Message{
+				Role:    "user",
+				Content: fmt.Sprintf("Tool round limit reached after %d rounds. Do not call more tools. Stop trying to gather more information and give the user the best answer possible from the evidence already available. If the task cannot be completed, say what is incomplete plainly.", o.config.MaxToolRounds),
+			}
+			messages = append(messages, limitMessage)
+			run = append(run, limitMessage)
+			_ = logger.Append("tool_round_limit_reached", map[string]any{"stepId": step.ID, "maxToolRounds": o.config.MaxToolRounds, "goal": step.Goal})
+			o.emit("thinking", "Tool round limit reached; asking assistant to stop and answer")
+			assistant, err := o.client.Complete(ctx, MainSystem, messages, nil)
+			if err != nil {
+				return run, policy, "", err
+			}
+			if assistant.Role == "" {
+				assistant.Role = "assistant"
+			}
+			messages = append(messages, assistant)
+			run = append(run, assistant)
+			_ = logger.Append("native_assistant_message", map[string]any{"stepId": step.ID, "round": round, "limited": true, "message": assistant})
+			return run, policy, "", nil
+		}
 		assistant, err := o.client.Complete(ctx, MainSystem, messages, nativeTools)
 		if err != nil {
 			return run, policy, "", err
@@ -270,14 +289,6 @@ func (o *Orchestrator) execute(ctx context.Context, history, run []openai.Messag
 		run = append(run, assistant)
 		_ = logger.Append("native_assistant_message", map[string]any{"stepId": step.ID, "round": round, "message": assistant})
 		if len(assistant.ToolCalls) == 0 {
-			if reason := completionBlocker(skill.Name, state); reason != "" {
-				correction := openai.Message{Role: "user", Content: reason}
-				messages = append(messages, correction)
-				run = append(run, correction)
-				_ = logger.Append("execution_retry", map[string]any{"stepId": step.ID, "round": round, "reason": correction.Content})
-				o.emit("retry", correction.Content)
-				continue
-			}
 			return run, policy, "", nil
 		}
 		for _, call := range assistant.ToolCalls {
@@ -288,7 +299,7 @@ func (o *Orchestrator) execute(ctx context.Context, history, run []openai.Messag
 				messages = append(messages, toolMessage)
 				run = append(run, toolMessage)
 				_ = logger.Append("tool_rejected", map[string]any{"stepId": step.ID, "round": round, "request": call, "result": rejection})
-				o.emit("retry", rejection["error"].(string))
+				o.emit("tool", rejection["error"].(string))
 				continue
 			}
 			control := o.handleControlTool(call, policy, logger, step.ID)
@@ -309,17 +320,17 @@ func (o *Orchestrator) execute(ctx context.Context, history, run []openai.Messag
 				messages = append(messages, toolMessage)
 				run = append(run, toolMessage)
 				_ = logger.Append("tool_rejected", map[string]any{"stepId": step.ID, "round": round, "request": call, "result": rejection})
-				o.emit("retry", rejection["error"].(string))
+				o.emit("tool", rejection["error"].(string))
 				continue
 			}
 			execution, executeErr := o.tools.Execute(ctx, call.Function.Name, call.Function.Arguments)
 			var output any = execution
 			if executeErr != nil {
 				output = map[string]any{"rejected": true, "error": executeErr.Error()}
-				o.emit("retry", executeErr.Error())
+				o.emit("tool", executeErr.Error())
 				_ = logger.Append("tool_rejected", map[string]any{"stepId": step.ID, "round": round, "request": call, "result": output})
 			} else {
-				state.recordSuccess(call.Function.Name, key, execution.Result, task)
+				state.recordSuccess(key)
 				if o.tools.Effect(call.Function.Name) == tools.EffectObserve && policy != VerifyFinal {
 					policy = VerifyFinal
 					o.emit("verification", "Final verification requested: observed information should be checked")
@@ -333,7 +344,6 @@ func (o *Orchestrator) execute(ctx context.Context, history, run []openai.Messag
 		}
 		messages, _ = session.TrimMessages(messages, o.config.MaxContextBytes)
 	}
-	return run, policy, "", fmt.Errorf("outcome exceeded %d tool rounds: %s", o.config.MaxToolRounds, step.Goal)
 }
 
 func (o *Orchestrator) handleControlTool(call openai.ToolCall, policy VerificationPolicy, logger *runlog.RunLogger, stepID string) executionControl {
@@ -357,74 +367,37 @@ func controlToolResult(name string, policy VerificationPolicy, reason string) ma
 	return map[string]any{"accepted": true, "policy": policy}
 }
 
-func (s *executionState) recordSuccess(toolName, key string, result any, task string) {
+func (s *executionState) recordSuccess(key string) {
 	s.successful[key] = true
-	s.successfulTools[toolName] = true
 	s.observedEvidence = true
-	if toolName != toolBrowserInteract {
-		return
-	}
-	page, ok := result.(map[string]any)
-	if !ok {
-		return
-	}
-	s.visitedBrowserURLs[normalizedURL(stringValue(page["url"]))] = true
-	if destination := requestedNavigationDestination(task, page); destination != "" && !s.visitedBrowserURLs[normalizedURL(destination)] {
-		s.pendingNavigationURL = destination
-		return
-	}
-	if s.visitedBrowserURLs[normalizedURL(s.pendingNavigationURL)] {
-		s.pendingNavigationURL = ""
-	}
 }
 
-func completionBlocker(skillName string, state executionState) string {
-	if state.pendingNavigationURL != "" {
-		return "Browser navigation is incomplete. The opened page exposed a navigation destination matching the user's requested resource. Open it with a read-only browserInteract call before answering: " + state.pendingNavigationURL
+func appendSkill(activeSkills []skills.Skill, skill skills.Skill) []skills.Skill {
+	if hasActiveSkill(activeSkills, skill.Name) {
+		return activeSkills
 	}
-	if requiresOpenedWebSource(skillName, state.successfulTools) {
-		return "Web research is incomplete. Search snippets are discovery hints only. Refine the search if needed, then open relevant source pages with fetchURL or browserInteract before answering. Do not ask the user whether to continue."
-	}
-	if !state.observedEvidence {
-		return "No observed tool evidence exists yet. Use an allowed tool to inspect available state before completing the outcome or saying information is missing."
-	}
-	return ""
+	return append(activeSkills, skill)
 }
 
-func requestedNavigationDestination(task string, result map[string]any) string {
-	current := normalizedURL(stringValue(result["url"]))
-	task = strings.ToLower(task)
-	var best string
-	var bestLabel string
-	links, _ := result["navigationLinks"].([]any)
-	for _, value := range links {
-		link, ok := value.(map[string]any)
-		if !ok {
-			continue
-		}
-		label := strings.TrimSpace(stringValue(link["text"]))
-		target := strings.TrimSpace(stringValue(link["url"]))
-		if len(label) < 4 || target == "" || normalizedURL(target) == current || !strings.Contains(task, strings.ToLower(label)) {
-			continue
-		}
-		if len(label) > len(bestLabel) {
-			bestLabel, best = label, target
+func hasActiveSkill(activeSkills []skills.Skill, name string) bool {
+	for _, skill := range activeSkills {
+		if skill.Name == name {
+			return true
 		}
 	}
-	return best
+	return false
 }
 
-func normalizedURL(value string) string {
-	return strings.TrimRight(strings.TrimSpace(value), "/")
+func skillNameList(activeSkills []skills.Skill) []string {
+	names := make([]string, 0, len(activeSkills))
+	for _, skill := range activeSkills {
+		names = append(names, skill.Name)
+	}
+	return names
 }
 
-func stringValue(value any) string {
-	text, _ := value.(string)
-	return text
-}
-
-func requiresOpenedWebSource(skillName string, successfulTools map[string]bool) bool {
-	return skillName == "web-search" && successfulTools[toolWebSearch] && !successfulTools[toolFetchURL] && !successfulTools[toolBrowserInteract]
+func skillNames(activeSkills []skills.Skill) string {
+	return strings.Join(skillNameList(activeSkills), ", ")
 }
 
 func (o *Orchestrator) complete(ctx context.Context, task string, history, run []openai.Message, logger *runlog.RunLogger) (CompletionReport, error) {

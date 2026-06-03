@@ -7,7 +7,7 @@
 | `OPENAI_API_KEY` | empty | Optional bearer token. |
 | `OPENHOME_SKILLS_DIR` | `./skills` | Skill catalog directory. |
 | `OPENHOME_WORKSPACE` | `./workspace` | Sandboxed task artifact directory. |
-| `OPENHOME_MAX_TOOL_ROUNDS` | `12` | Maximum native tool rounds per outcome. |
+| `OPENHOME_MAX_TOOL_ROUNDS` | `0` | Maximum native tool rounds per outcome. `0` means unlimited. A positive limit asks the assistant to stop using tools and answer from available evidence when exceeded. |
 | `OPENHOME_MAX_CONTEXT_BYTES` | `98304` | Sliding retained-message byte budget. Oldest context drops first when exceeded. |
 | `OPENHOME_MAX_STEP_ATTEMPTS` | `3` | Deprecated compatibility setting from the per-step verifier runtime. |
 | `OPENHOME_PERMISSION_MODE` | `default` | Startup advanced-tool policy: `ask`, `default`, or `allow`. |

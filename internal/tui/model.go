@@ -9,6 +9,7 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/glamour/v2"
 	"charm.land/lipgloss/v2"
 
 	"github.com/CaowardlyLion/OpenHome/internal/agents"
@@ -370,70 +371,28 @@ func renderTranscriptEntry(entry transcriptEntry, width int) string {
 	prefix := "[" + entry.label + "] "
 	bodyWidth := max(10, width-lipgloss.Width(prefix))
 	if entry.label == "assistant" {
-		return prefix + renderMarkdown(entry.text, bodyWidth, strings.Repeat(" ", lipgloss.Width(prefix)))
+		return prefix + renderAssistantMarkdown(entry.text, bodyWidth, strings.Repeat(" ", lipgloss.Width(prefix)))
 	}
 	return wrapText(prefix+entry.text, width)
 }
 
-func renderMarkdown(text string, width int, continuation string) string {
-	var lines []string
-	inCode := false
-	for _, raw := range strings.Split(text, "\n") {
-		line := strings.TrimRight(raw, " \t")
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "```") {
-			inCode = !inCode
-			lines = append(lines, continuation+trimmed)
-			continue
-		}
-		if trimmed == "" {
-			lines = append(lines, "")
-			continue
-		}
-		if inCode {
-			lines = append(lines, continuation+"  "+line)
-			continue
-		}
-		marker, rest := markdownMarker(trimmed)
-		if marker != "" {
-			indent := continuation + strings.Repeat(" ", lipgloss.Width(marker))
-			lines = append(lines, continuation+marker+wrapText(rest, width-lipgloss.Width(marker)))
-			if len(lines) > 0 {
-				lines[len(lines)-1] = strings.ReplaceAll(lines[len(lines)-1], "\n", "\n"+indent)
-			}
-			continue
-		}
-		if strings.HasPrefix(trimmed, "#") {
-			heading := strings.TrimSpace(strings.TrimLeft(trimmed, "#"))
-			lines = append(lines, continuation+lipgloss.NewStyle().Bold(true).Render(heading))
-			continue
-		}
-		lines = append(lines, continuation+wrapText(trimmed, width))
+func renderAssistantMarkdown(text string, width int, continuation string) string {
+	renderer, err := glamour.NewTermRenderer(glamour.WithWordWrap(width))
+	if err != nil {
+		return wrapText(text, width)
 	}
-	if len(lines) == 0 {
+	rendered, err := renderer.Render(text)
+	if err != nil {
+		return wrapText(text, width)
+	}
+	lines := strings.Split(strings.TrimRight(rendered, "\n"), "\n")
+	if len(lines) == 0 || lines[0] == "" {
 		return ""
 	}
-	first := strings.TrimPrefix(lines[0], continuation)
-	lines[0] = first
+	for index := 1; index < len(lines); index++ {
+		lines[index] = continuation + strings.TrimRight(lines[index], " \t")
+	}
 	return strings.Join(lines, "\n")
-}
-
-func markdownMarker(line string) (string, string) {
-	for _, marker := range []string{"- ", "* "} {
-		if strings.HasPrefix(line, marker) {
-			return marker, strings.TrimSpace(line[len(marker):])
-		}
-	}
-	dot := strings.Index(line, ". ")
-	if dot > 0 {
-		for _, char := range line[:dot] {
-			if char < '0' || char > '9' {
-				return "", ""
-			}
-		}
-		return line[:dot+2], strings.TrimSpace(line[dot+2:])
-	}
-	return "", ""
 }
 
 func wrapText(text string, width int) string {

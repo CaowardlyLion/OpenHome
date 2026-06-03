@@ -163,9 +163,12 @@ func TestAssistantMarkdownKeepsListAndCodeFormatting(t *testing.T) {
 		label: "assistant",
 		text:  "## Result\n\n- First item with enough words to wrap cleanly\n- Second item\n\n```sh\ngo test ./...\n```",
 	}, 42)
-	for _, expected := range []string{"[assistant]", "Result", "- First item", "to wrap cleanly", "```sh", "go test ./..."} {
+	for _, expected := range []string{"[assistant]", "Result", "First item", "to wrap cleanly", "Second item", "go test ./..."} {
 		if !strings.Contains(rendered, expected) {
 			t.Fatalf("missing %q in render:\n%s", expected, rendered)
 		}
+	}
+	if strings.Contains(rendered, "## Result") || strings.Contains(rendered, "```sh") {
+		t.Fatalf("raw markdown was not rendered:\n%s", rendered)
 	}
 }

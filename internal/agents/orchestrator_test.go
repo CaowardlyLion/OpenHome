@@ -113,23 +113,8 @@ func TestCompletionPromptSaysHiddenTraceWasNotShownToUser(t *testing.T) {
 	}
 }
 
-func TestWebSearchSkillRequiresOpenedSourceBeforeCompletion(t *testing.T) {
-	if !requiresOpenedWebSource("web-search", map[string]bool{"webSearch": true}) {
-		t.Fatal("web-search completed from snippets without opening source")
-	}
-	if requiresOpenedWebSource("web-search", map[string]bool{"webSearch": true, "fetchURL": true}) {
-		t.Fatal("fetchURL did not satisfy opened-source requirement")
-	}
-	if requiresOpenedWebSource("web-search", map[string]bool{"webSearch": true, "browserInteract": true}) {
-		t.Fatal("browserInteract did not satisfy opened-source requirement")
-	}
-	if requiresOpenedWebSource("grocery-list", map[string]bool{"webSearch": true}) {
-		t.Fatal("non-web skill unexpectedly requires opened source")
-	}
-}
-
 func TestExecutionPromptFollowsSkillReselectionToolGuidance(t *testing.T) {
-	prompt := ExecutionPrompt("research site", Step{ID: "1", Goal: "Research site"}, skills.Skill{Name: "web-search"})
+	prompt := ExecutionPrompt("research site", Step{ID: "1", Goal: "Research site"}, []skills.Skill{{Name: "web-search"}})
 	if !strings.Contains(prompt, "When a tool result recommends request_skill_reselection") {
 		t.Fatalf("prompt = %q", prompt)
 	}
@@ -138,23 +123,6 @@ func TestExecutionPromptFollowsSkillReselectionToolGuidance(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "observed evidence should be checked") {
 		t.Fatalf("prompt = %q", prompt)
-	}
-}
-
-func TestRequestedNavigationDestinationMatchesRequestedSection(t *testing.T) {
-	result := map[string]any{
-		"url": "https://example.com/",
-		"navigationLinks": []any{
-			map[string]any{"text": "World", "url": "https://example.com/world/"},
-			map[string]any{"text": "Technology", "url": "https://example.com/technology/"},
-		},
-	}
-	if destination := requestedNavigationDestination("show technology headlines", result); destination != "https://example.com/technology/" {
-		t.Fatalf("destination = %q", destination)
-	}
-	result["url"] = "https://example.com/technology/"
-	if destination := requestedNavigationDestination("show technology headlines", result); destination != "" {
-		t.Fatalf("destination = %q", destination)
 	}
 }
 
@@ -309,37 +277,8 @@ func TestLibrarianAcceptsNoApplicableSkill(t *testing.T) {
 	if skillChoices != 1 {
 		t.Fatalf("skill choices = %d", skillChoices)
 	}
-	if !containsText(provider.requests[2].history, "Selected skill: none") {
+	if !containsText(provider.requests[2].history, "Active skills:") || !containsText(provider.requests[2].history, "- none") {
 		t.Fatalf("executor history = %#v", provider.requests[2].history)
-	}
-}
-
-func TestExecutorRetriesUnsupportedMissingInformationClaim(t *testing.T) {
-	provider := &fakeProvider{
-		structured: []structuredReply{
-			{"route_decision", RouteDecision{Intent: "Show current grocery list.", Lane: SimpleTask, Verification: VerifyNone, Reason: "workspace state"}},
-			{"skill_choice", SkillChoice{SkillName: "grocery-list", Reason: "reads list"}},
-			{"final_verification", Verification{Status: "passed", Reason: "read file supports answer"}},
-			{"completion_report", CompletionReport{Summary: "Current grocery list:", Details: []string{"milk"}}},
-		},
-		completes: []openai.Message{
-			{Role: "assistant", Content: "No grocery list found."},
-			{Role: "assistant", ToolCalls: []openai.ToolCall{call("1", "readFile", `{"path":"grocery_list.md"}`)}},
-			{Role: "assistant", Content: "The grocery list contains milk."},
-		},
-	}
-	orchestrator, cfg := fixture(t, provider)
-	if err := os.MkdirAll(cfg.WorkspaceDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(cfg.WorkspaceDir, "grocery_list.md"), []byte("- milk"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := orchestrator.Handle(context.Background(), "what is in my grocery list?"); err != nil {
-		t.Fatal(err)
-	}
-	if len(provider.requests) < 4 || !containsText(provider.requests[3].history, "No observed tool evidence exists yet") {
-		t.Fatalf("requests = %#v", provider.requests)
 	}
 }
 
@@ -410,6 +349,16 @@ func TestExecutorCanEscalateVerificationAndReselectSkill(t *testing.T) {
 	if _, err := orchestrator.Handle(context.Background(), "write tasks"); err != nil {
 		t.Fatal(err)
 	}
+	foundBothSkills := false
+	for _, request := range provider.requests {
+		if request.kind == "complete" && containsText(request.history, "- grocery-list") && containsText(request.history, "- task-planning") {
+			foundBothSkills = true
+			break
+		}
+	}
+	if !foundBothSkills {
+		t.Fatalf("requests = %#v", provider.requests)
+	}
 }
 
 func TestPrematureSkillReselectionIsRejectedUntilEvidenceExists(t *testing.T) {
@@ -433,6 +382,73 @@ func TestPrematureSkillReselectionIsRejectedUntilEvidenceExists(t *testing.T) {
 	found := false
 	for _, request := range provider.requests {
 		if containsText(request.history, "Skill reselection is premature") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("requests = %#v", provider.requests)
+	}
+}
+
+func TestToolRoundLimitAsksAssistantToStopInsteadOfError(t *testing.T) {
+	provider := &fakeProvider{
+		structured: []structuredReply{
+			{"route_decision", RouteDecision{Intent: "Inspect files.", Lane: SimpleTask, Verification: VerifyNone, Reason: "narrow"}},
+			{"skill_choice", SkillChoice{SkillName: "grocery-list", Reason: "initial"}},
+			{"final_verification", Verification{Status: "passed", Reason: "limited but observed"}},
+			{"completion_report", CompletionReport{Summary: "Stopped after tool limit."}},
+		},
+		completes: []openai.Message{
+			{Role: "assistant", ToolCalls: []openai.ToolCall{call("1", "listFiles", `{}`)}},
+			{Role: "assistant", Content: "I have to stop here."},
+		},
+	}
+	orchestrator, _ := fixture(t, provider)
+	orchestrator.config.MaxToolRounds = 1
+	result, err := orchestrator.Handle(context.Background(), "inspect files")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Answer != "Stopped after tool limit." {
+		t.Fatalf("answer = %q", result.Answer)
+	}
+	limited := false
+	for _, request := range provider.requests {
+		if request.kind == "complete" && len(request.tools) == 0 && containsText(request.history, "Tool round limit reached") {
+			limited = true
+			break
+		}
+	}
+	if !limited {
+		t.Fatalf("requests = %#v", provider.requests)
+	}
+}
+
+func TestFinalVerificationFailureIsReportedButNonFatal(t *testing.T) {
+	provider := &fakeProvider{
+		structured: []structuredReply{
+			{"route_decision", RouteDecision{Intent: "Inspect files.", Lane: SimpleTask, Verification: VerifyFinal, Reason: "needs evidence"}},
+			{"skill_choice", SkillChoice{SkillName: "grocery-list", Reason: "initial"}},
+			{"final_verification", Verification{Status: "failed", Reason: "Only partial evidence was available."}},
+			{"completion_report", CompletionReport{Summary: "I found partial evidence.", Details: []string{"Only partial evidence was available."}}},
+		},
+		completes: []openai.Message{
+			{Role: "assistant", ToolCalls: []openai.ToolCall{call("1", "listFiles", `{}`)}},
+			{Role: "assistant", Content: "Partial evidence found."},
+		},
+	}
+	orchestrator, _ := fixture(t, provider)
+	result, err := orchestrator.Handle(context.Background(), "inspect files")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Answer, "partial evidence") {
+		t.Fatalf("answer = %q", result.Answer)
+	}
+	found := false
+	for _, request := range provider.requests {
+		if request.name == "completion_report" && containsText(request.history, "verification_failed_nonfatal") {
 			found = true
 			break
 		}

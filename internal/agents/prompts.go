@@ -3,6 +3,7 @@ package agents
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/CaowardlyLion/OpenHome/internal/skills"
 )
@@ -32,8 +33,9 @@ If an answer may depend on private, local, workspace, household, preference, pan
 never choose direct_answer. Choose simple_task so the librarian can select a skill and the executor can inspect tools.
 If an answer needs fresh internet information or web research, choose simple_task so the executor can use web tools.
 Choose final verification for requests that provide factual information from current, external, local, private, or tool-observed evidence.
-Also choose final verification when complexity, mutation risk, or uncertain evidence warrants it. Use none only for low-risk direct answers
-or trivial narrow tasks whose correctness does not depend on retrieved evidence.
+This includes questions where the main risk is giving a wrong answer, not only tasks that mutate files.
+Also choose final verification when complexity, mutation risk, or uncertain evidence warrants it.
+Use none only for low-risk direct answers or trivial narrow tasks whose correctness does not depend on retrieved or inspected evidence.
 
 Message:
 %s`, message)
@@ -61,13 +63,11 @@ Current execution unit: %s%s
 Return one exact catalog skillName, or "none" when no catalog skill applies.`, catalog, task, jsonText(step), extra)
 }
 
-func ExecutionPrompt(task string, step Step, skill skills.Skill) string {
-	return fmt.Sprintf(`Execute the current outcome using the selected skill.
+func ExecutionPrompt(task string, step Step, activeSkills []skills.Skill) string {
+	return fmt.Sprintf(`Execute the current outcome using all active skills.
 Task: %s
 Outcome: %s
-Selected skill: %s
-Allowed workspace tools: %v
-Skill instructions:
+Active skills:
 %s
 
 Use native function calls as needed. Use exact argument key "path", not "file_path".
@@ -80,9 +80,28 @@ When a tool result recommends request_skill_reselection, call request_skill_rese
 When browserInteract returns a navigationLinks destination matching the user's requested section, category, account, or resource,
 open that destination with another read-only browserInteract call before completing. Do not substitute related content from a broader page.
 When the outcome is complete, reply with a brief completion sentence and no tool call.
-Call request_skill_reselection only if this skill cannot handle the outcome.
+Call request_skill_reselection only if the active skills cannot handle the outcome or another playbook would materially help.
 Call request_verification if observed evidence should be checked before answering. This is especially important for current,
-external, local, private, or factual information tasks.`, task, jsonText(step), skill.Name, skill.AllowedTools, skill.Content)
+external, local, private, or factual information tasks.`, task, jsonText(step), FormatActiveSkills(activeSkills))
+}
+
+func FormatActiveSkills(activeSkills []skills.Skill) string {
+	var blocks []string
+	for _, skill := range activeSkills {
+		blocks = append(blocks, fmt.Sprintf(`- %s
+  Recommended tools: %v
+  Instructions:
+%s`, skill.Name, skill.AllowedTools, indentBlock(skill.Content, "    ")))
+	}
+	return strings.Join(blocks, "\n\n")
+}
+
+func indentBlock(content, prefix string) string {
+	lines := strings.Split(strings.TrimSpace(content), "\n")
+	for index, line := range lines {
+		lines[index] = prefix + line
+	}
+	return strings.Join(lines, "\n")
 }
 
 func VerificationPrompt(task string) string {

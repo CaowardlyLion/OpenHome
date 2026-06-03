@@ -21,7 +21,7 @@ OPENAI_MODEL=gemma-4-e2b-it-bf16
 OPENAI_API_KEY=
 OPENHOME_SKILLS_DIR=./skills
 OPENHOME_WORKSPACE=./workspace
-OPENHOME_MAX_TOOL_ROUNDS=12
+OPENHOME_MAX_TOOL_ROUNDS=0
 OPENHOME_MAX_CONTEXT_BYTES=98304
 OPENHOME_MAX_STEP_ATTEMPTS=3
 OPENHOME_PERMISSION_MODE=default
@@ -44,6 +44,10 @@ OpenHome routes requests through `direct_answer`, `simple_task`, or
 runs when the router or executor requests it, and is automatically escalated
 when the answer depends on observed information from read/search/browser/fetch
 tools.
+
+`OPENHOME_MAX_TOOL_ROUNDS=0` means unlimited tool rounds. When set to a positive
+number, OpenHome asks the assistant to stop using tools and answer from available
+evidence after that many rounds instead of failing the request.
 
 Advanced tools can read external files, run commands, fetch compact website text,
 download files, search the web, navigate rendered pages with CloakBrowser, and

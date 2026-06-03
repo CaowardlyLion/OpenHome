@@ -197,7 +197,7 @@ func (runner CloakBrowserRunner) Run(ctx context.Context, args map[string]any) (
 	stderr := &cappedBuffer{limit: browserOutputLimit}
 	command.Stdout, command.Stderr = stdout, stderr
 	if err := command.Run(); err != nil {
-		message := stderr.buffer.String()
+		message := sanitizeBridgeError(stderr.buffer.String())
 		if message == "" {
 			message = err.Error()
 		}
@@ -208,4 +208,22 @@ func (runner CloakBrowserRunner) Run(ctx context.Context, args map[string]any) (
 		return nil, fmt.Errorf("decode CloakBrowser bridge output: %w", err)
 	}
 	return result, nil
+}
+
+func sanitizeBridgeError(message string) string {
+	message = strings.TrimSpace(message)
+	if index := strings.Index(message, "\nTraceback "); index >= 0 {
+		message = strings.TrimSpace(message[:index])
+	}
+	if index := strings.Index(message, "\n\nDuring handling of the above exception"); index >= 0 {
+		message = strings.TrimSpace(message[:index])
+	}
+	lines := strings.Split(message, "\n")
+	if len(lines) > 8 {
+		message = strings.Join(lines[:8], "\n")
+	}
+	if len(message) > 2000 {
+		message = strings.TrimSpace(message[:2000]) + "..."
+	}
+	return message
 }

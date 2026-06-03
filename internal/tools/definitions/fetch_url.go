@@ -1,24 +1,22 @@
 package definitions
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"html"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strings"
 
 	"github.com/CaowardlyLion/OpenHome/internal/permissions"
 	"github.com/CaowardlyLion/OpenHome/internal/tools"
+	xhtml "golang.org/x/net/html"
 )
 
 var errRedirectDenied = errors.New("user denied redirect")
 
 const fetchURLLinkLimit = 60
-
-var htmlAnchorPattern = regexp.MustCompile(`(?is)<a\b[^>]*\bhref\s*=\s*["']([^"']+)["'][^>]*>(.*?)</a\s*>`)
 
 func FetchURL() tools.Definition {
 	return tools.Definition{
@@ -71,38 +69,83 @@ func extractResponseLinks(content []byte, baseURL *url.URL) []map[string]string 
 	if baseURL == nil {
 		return nil
 	}
+	document, err := xhtml.Parse(bytes.NewReader(content))
+	if err != nil {
+		return nil
+	}
 	seen := map[string]bool{}
 	result := make([]map[string]string, 0, fetchURLLinkLimit)
-	for _, match := range htmlAnchorPattern.FindAllSubmatch(content, -1) {
-		href := strings.TrimSpace(html.UnescapeString(string(match[1])))
-		target, err := url.Parse(href)
-		if err != nil {
-			continue
-		}
-		target = baseURL.ResolveReference(target)
-		if (target.Scheme != "http" && target.Scheme != "https") || target.Host == "" {
-			continue
-		}
-		target.Fragment = ""
-		resolved := target.String()
-		if seen[resolved] {
-			continue
-		}
-		text := htmlTagPattern.ReplaceAllString(string(match[2]), " ")
-		text = strings.TrimSpace(spacePattern.ReplaceAllString(html.UnescapeString(text), " "))
-		if text == "" {
-			continue
-		}
-		if len(text) > 240 {
-			text = text[:240]
-		}
-		seen[resolved] = true
-		result = append(result, map[string]string{"text": text, "url": resolved})
+	var walk func(*xhtml.Node)
+	walk = func(node *xhtml.Node) {
 		if len(result) == fetchURLLinkLimit {
-			break
+			return
+		}
+		if node.Type == xhtml.ElementNode && strings.EqualFold(node.Data, "a") {
+			href := anchorHref(node)
+			if href != "" {
+				result = appendResolvedLink(result, seen, baseURL, href, nodeText(node))
+			}
+		}
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
+			walk(child)
 		}
 	}
+	walk(document)
 	return result
+}
+
+func appendResolvedLink(result []map[string]string, seen map[string]bool, baseURL *url.URL, href, label string) []map[string]string {
+	href = strings.TrimSpace(href)
+	if href == "" {
+		return result
+	}
+	target, err := url.Parse(href)
+	if err != nil {
+		return result
+	}
+	target = baseURL.ResolveReference(target)
+	if (target.Scheme != "http" && target.Scheme != "https") || target.Host == "" {
+		return result
+	}
+	target.Fragment = ""
+	resolved := target.String()
+	if seen[resolved] {
+		return result
+	}
+	text := strings.TrimSpace(spacePattern.ReplaceAllString(label, " "))
+	if text == "" {
+		return result
+	}
+	if len(text) > 240 {
+		text = text[:240]
+	}
+	seen[resolved] = true
+	return append(result, map[string]string{"text": text, "url": resolved})
+}
+
+func anchorHref(node *xhtml.Node) string {
+	for _, attr := range node.Attr {
+		if strings.EqualFold(attr.Key, "href") {
+			return attr.Val
+		}
+	}
+	return ""
+}
+
+func nodeText(node *xhtml.Node) string {
+	var builder strings.Builder
+	var walk func(*xhtml.Node)
+	walk = func(current *xhtml.Node) {
+		if current.Type == xhtml.TextNode {
+			builder.WriteString(current.Data)
+			builder.WriteByte(' ')
+		}
+		for child := current.FirstChild; child != nil; child = child.NextSibling {
+			walk(child)
+		}
+	}
+	walk(node)
+	return builder.String()
 }
 
 func browserNavigationFallbackReason(status int, text string) string {
@@ -155,7 +198,7 @@ func getApproved(ctx context.Context, toolContext tools.Context, tool, rawURL, r
 			return fmt.Errorf("too many redirects")
 		}
 		target := request.URL.String()
-		if toolContext.Permissions.Authorize(ctx, permissions.Request{Tool: tool, Reason: reason + " (redirect)", Target: target, SimilarKey: target}) == permissions.Deny {
+		if toolContext.Permissions.Authorize(ctx, permissions.Request{Tool: tool, Reason: reason + " (redirect)", Target: target, SimilarKey: target, Elevated: true}) == permissions.Deny {
 			return fmt.Errorf("%w to %s", errRedirectDenied, target)
 		}
 		return nil

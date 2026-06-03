@@ -129,4 +129,4 @@ if __name__ == "__main__":
         main()
     except Exception as exc:
         print(str(exc), file=sys.stderr)
-        raise
+        sys.exit(1)

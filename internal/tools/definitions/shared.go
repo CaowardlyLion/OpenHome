@@ -2,7 +2,6 @@ package definitions
 
 import (
 	"fmt"
-	"html"
 	"io"
 	"net/http"
 	"net/url"
@@ -13,12 +12,8 @@ import (
 const contextTextLimit = 32 << 10
 
 var (
-	htmlCommentPattern = regexp.MustCompile(`(?s)<!--.*?-->`)
-	htmlNoisePattern   = regexp.MustCompile(`(?is)<(?:script|style|svg|noscript|template)[^>]*>.*?</(?:script|style|svg|noscript|template)\s*>`)
-	htmlBreakPattern   = regexp.MustCompile(`(?i)</?(address|article|aside|blockquote|br|div|footer|h[1-6]|header|hr|li|main|nav|ol|p|pre|section|table|tr|ul)[^>]*>`)
-	htmlTagPattern     = regexp.MustCompile(`(?s)<[^>]+>`)
-	spacePattern       = regexp.MustCompile(`[ \t\f\v]+`)
-	blankLinePattern   = regexp.MustCompile(`\n{3,}`)
+	spacePattern     = regexp.MustCompile(`[ \t\f\v]+`)
+	blankLinePattern = regexp.MustCompile(`\n{3,}`)
 )
 
 func stringArg(args map[string]any, name string) (string, error) {
@@ -120,13 +115,6 @@ func selectedHeaders(headers http.Header) map[string]string {
 
 func compactResponseText(content []byte, contentType string) (string, bool) {
 	text := string(content)
-	if strings.Contains(strings.ToLower(contentType), "html") || strings.Contains(strings.ToLower(text), "<html") {
-		text = htmlCommentPattern.ReplaceAllString(text, "")
-		text = htmlNoisePattern.ReplaceAllString(text, "")
-		text = htmlBreakPattern.ReplaceAllString(text, "\n")
-		text = htmlTagPattern.ReplaceAllString(text, "")
-		text = html.UnescapeString(text)
-	}
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	text = strings.ReplaceAll(text, "\r", "\n")
 	lines := strings.Split(text, "\n")

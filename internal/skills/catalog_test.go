@@ -50,3 +50,21 @@ func TestRepositoryWebSearchSkillLoads(t *testing.T) {
 		t.Fatalf("skill content = %q", skill.Content)
 	}
 }
+
+func TestRepositoryCostcoPriceMatchingSkillLoads(t *testing.T) {
+	catalog, err := skills.Load(filepath.Join("..", "..", "skills"), []string{
+		"listFiles", "readFile", "searchFiles", "writeFile", "webSearch", "fetchURL", "browserInteract", "sendEmail",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	skill, err := catalog.Find("costco-price-matching")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"browser-navigation", "If the user did not provide a location", "nearby warehouses"} {
+		if !strings.Contains(skill.Content, expected) {
+			t.Fatalf("skill missing %q: %q", expected, skill.Content)
+		}
+	}
+}

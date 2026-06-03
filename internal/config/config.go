@@ -31,7 +31,7 @@ func Load() (Config, error) {
 }
 
 func LoadFrom(cwd string) (Config, error) {
-	rounds, err := positiveInteger("OPENHOME_MAX_TOOL_ROUNDS", 12)
+	rounds, err := nonNegativeInteger("OPENHOME_MAX_TOOL_ROUNDS", 0)
 	if err != nil {
 		return Config{}, err
 	}
@@ -80,6 +80,18 @@ func positiveInteger(name string, fallback int) (int, error) {
 	parsed, err := strconv.Atoi(value)
 	if err != nil || parsed < 1 {
 		return 0, fmt.Errorf("%s must be a positive integer", name)
+	}
+	return parsed, nil
+}
+
+func nonNegativeInteger(name string, fallback int) (int, error) {
+	value := os.Getenv(name)
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 0 {
+		return 0, fmt.Errorf("%s must be a non-negative integer", name)
 	}
 	return parsed, nil
 }
